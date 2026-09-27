@@ -1,0 +1,64 @@
+// Regex grounding before the critic (F3, R7): claims_used ids, numbers/%/$ against facts, discount and claim words, Disco limits. Pure.
+import { CTA_PRESETS, type Creative, type Fact, type Offer } from './types';
+
+export const LIMITS = { heading: 50, subheading: 175 } as const;
+
+const DISCOUNT_WORDS: { re: RegExp; allowedFor: Offer['type'][] }[] = [
+  { re: /\bfree shipping\b/gi, allowedFor: ['free_shipping'] },
+  { re: /\bbogo\b/gi, allowedFor: ['bogo'] },
+  // "off" only in a price context ("20% off", "$10 off", "off your first order"); "off your to-do list" is not a discount.
+  { re: /(?:\d\s?%|\$\s?\d[\d,.]*)\s*off\b|\boff\s+(?:your\s+)?(?:first\s+)?(?:order|purchase)\b/gi, allowedFor: ['pct_off', 'fixed_off', 'bogo', 'free_gift'] },
+  { re: /\b(discount|save)\b/gi, allowedFor: ['pct_off', 'fixed_off', 'bogo', 'free_gift'] },
+];
+const CLAIM_WORDS = /\b(clinically|proven|guaranteed|best)\b|#1/gi;
+const MONEY = /\$\s?\d[\d,]*(?:\.\d+)?/g;
+const PERCENT = /\d+(?:\.\d+)?\s?%/g;
+const BARE_NUMBER = /(?<![\d.,$#])\d+(?:\.\d+)?(?![\d.,]*%)/g;
+
+const toNumber = (s: string) => Number(s.replace(/[$,%\s]/g, ''));
+
+type Grounded = Pick<Creative, 'heading' | 'subheading' | 'cta' | 'claims_used' | 'disclosure'>;
+
+export function validateClaims(creative: Pick<Creative, 'claims_used'>, facts: Fact[]): string[] {
+  const ids = new Set(facts.map((f) => f.id));
+  return creative.claims_used.filter((id) => !ids.has(id)).map((id) => `claims_used references unknown fact "${id}"`);
+}
+
+/** Numbers, percentages, dollar amounts, discount words and claim words that neither the facts nor the offer justify. */
+export function regexFlags(text: string, facts: Fact[], offer: Offer | null): string[] {
+  const flags: string[] = [];
+  const factText = facts.map((f) => f.text).join('\n').toLowerCase();
+  const knownNumbers = new Set<number>();
+  for (const m of factText.match(/\d[\d,]*(?:\.\d+)?/g) ?? []) knownNumbers.add(toNumber(m));
+  if (offer?.amount != null) knownNumbers.add(offer.amount);
+
+  for (const re of [MONEY, PERCENT, BARE_NUMBER]) {
+    for (const m of text.match(re) ?? []) {
+      if (!knownNumbers.has(toNumber(m))) flags.push(`number "${m.trim()}" not in facts or offer`);
+    }
+  }
+  for (const { re, allowedFor } of DISCOUNT_WORDS) {
+    for (const m of text.match(re) ?? []) {
+      const justified = (offer && allowedFor.includes(offer.type)) || factText.includes(m.toLowerCase());
+      if (!justified) flags.push(`discount word "${m}" without a matching offer`);
+    }
+  }
+  for (const m of text.match(CLAIM_WORDS) ?? []) {
+    if (!factText.includes(m.toLowerCase())) flags.push(`claim word "${m}" not in facts`);
+  }
+  return flags;
+}
+
+export function checkLimits(creative: Pick<Creative, 'heading' | 'subheading' | 'cta'>): string[] {
+  const flags: string[] = [];
+  if (creative.heading.length > LIMITS.heading) flags.push(`heading is ${creative.heading.length} chars (max ${LIMITS.heading})`);
+  if (creative.subheading.length > LIMITS.subheading) flags.push(`subheading is ${creative.subheading.length} chars (max ${LIMITS.subheading})`);
+  if (!(CTA_PRESETS as readonly string[]).includes(creative.cta)) flags.push(`cta "${creative.cta}" is not a Disco preset`);
+  return flags;
+}
+
+export function groundCreative(creative: Grounded, facts: Fact[], offer: Offer | null): { ok: boolean; flags: string[] } {
+  const text = [creative.heading, creative.subheading, creative.disclosure ?? ''].join('\n');
+  const flags = [...validateClaims(creative, facts), ...regexFlags(text, facts, offer), ...checkLimits(creative)];
+  return { ok: flags.length === 0, flags };
+}

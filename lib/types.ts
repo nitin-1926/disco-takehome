@@ -92,15 +92,12 @@ export interface AdvertiserProfile {
   is_subscription: boolean;
   buyer_age: { low: number; high: number } | null;
   buyer_gender: 'female' | 'male' | 'balanced' | 'unspecified';
-  origin: string | null;
-  target_geo: string;
   values: string[];
   tone: string;
   facts: Fact[];
   assumptions: Assumption[];
   triage: Triage;
   chips: InterpretationChip[];
-  language: string;
 }
 
 // ---- Stage 3: publishers ----

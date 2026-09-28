@@ -41,15 +41,12 @@ export function finalizeProfile(raw: UnderstandOutput, input: string): Advertise
     is_subscription: raw.is_subscription,
     buyer_age: raw.buyer_age && raw.buyer_age.low > 0 && raw.buyer_age.high >= raw.buyer_age.low ? raw.buyer_age : null,
     buyer_gender: raw.buyer_gender,
-    origin: raw.origin,
-    target_geo: raw.target_geo || 'US',
     values: raw.values,
     tone: raw.tone,
     facts,
     assumptions: raw.assumptions,
     triage: { ...raw.triage, clarity, policy_banned },
     chips,
-    language: raw.language || 'en',
   };
 }
 

@@ -11,6 +11,8 @@ const DISCOUNT_WORDS: { re: RegExp; allowedFor: Offer['type'][] }[] = [
   { re: /\b(discount|save)\b/gi, allowedFor: ['pct_off', 'fixed_off', 'bogo', 'free_gift'] },
 ];
 const CLAIM_WORDS = /\b(clinically|proven|guaranteed|best)\b|#1/gi;
+/** Disco's copy rules that need no reading: friction words, exclamation marks, emoji. */
+const COPY_RULES = /\b(apply|sign up|register|learn more)\b|!|\p{Extended_Pictographic}/giu;
 const MONEY = /\$\s?\d[\d,]*(?:\.\d+)?/g;
 const PERCENT = /\d+(?:\.\d+)?\s?%/g;
 // Thousands-grouped numbers first ("10,000" is one number, not "10").
@@ -51,6 +53,7 @@ export function regexFlags(rawText: string, facts: Fact[], offer: Offer | null):
   for (const m of text.match(CLAIM_WORDS) ?? []) {
     if (!factText.includes(m.toLowerCase())) flags.push(`claim word "${m}" not in facts`);
   }
+  for (const m of text.match(COPY_RULES) ?? []) flags.push(`"${m}" breaks Disco's copy rules`);
   return flags;
 }
 
@@ -67,3 +70,14 @@ export function groundCreative(creative: Grounded, facts: Fact[], offer: Offer |
   const flags = [...validateClaims(creative, facts, offer), ...regexFlags(text, facts, offer), ...checkLimits(creative)];
   return { ok: flags.length === 0, flags };
 }
+
+/** Two headlines that say the same thing ("A gift that feels considered" / "Give a gift that feels considered"):
+ * word-set overlap of 75% or more. Cards are written one per call, so no single call can see its siblings. */
+export function sameHeading(a: string, b: string): boolean {
+  const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+  const x = words(a);
+  const y = words(b);
+  const shared = [...x].filter((w) => y.has(w)).length;
+  return shared / new Set([...x, ...y]).size >= 0.75;
+}
+

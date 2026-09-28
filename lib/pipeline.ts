@@ -4,7 +4,7 @@ import { personas as PERSONAS, publishers as PUBLISHERS } from './data';
 import { retrieveCached, type Retrieved } from './embed';
 import { env } from './env';
 import { consistentComparatives, groupExclusions, resolveViability, scorePublishers, WEIGHTS, type Weights } from './funnel';
-import { checkLimits, groundCreative } from './grounding';
+import { checkLimits, groundCreative, sameHeading } from './grounding';
 import { callLLM, LlmError, type CallOptions, type CallResult, type PromptModule } from './llm';
 import { CREATIVES_MAX, PIPELINE_VERSION } from './models';
 import { scorePersonas } from './personas';
@@ -332,6 +332,10 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
     let written = 0;
     let creativeErr: unknown = null;
     const sources: Source[] = [];
+    const landed = picked.map(() => {
+      let done!: () => void;
+      return { p: new Promise<void>((r) => (done = r)), done: () => done() };
+    });
     await Promise.all(
       picked.map(async (p, i) => {
         const persona = PERSONAS.find((x) => x.id === p.persona_id)!;
@@ -344,11 +348,18 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
           creativeErr ??= e;
           card.error = e instanceof LlmError ? ERROR_MESSAGES[e.code] : ERROR_MESSAGES.provider_error;
         }
+        landed[i].done();
         if (++written === picked.length) {
           if (creativeErr) fail('creative', creativeErr);
           emit({ type: 'stage', stage: 'creative', status: 'done', source: sources.includes('live') ? 'live' : sources[0], ms: Date.now() - t1, payload: { creatives: result.creatives } });
         }
-        if (!card.error) await checkCard(card);
+        if (card.error) return;
+        // A headline that repeats an earlier card's goes back through revise. Compared only with the cards before it,
+        // so the same card is flagged live and in replay whatever order the calls land in.
+        await Promise.all(landed.slice(0, i).map((l) => l.p));
+        const twin = result.creatives.slice(0, i).find((o) => !o.error && sameHeading(o.heading, card.heading));
+        if (twin) card.grounding_flags.push(`heading repeats ${twin.id}: write this persona's own angle`);
+        await checkCard(card);
       }),
     );
     finishChecks();
@@ -486,8 +497,6 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
           disinterests_to_avoid: j.disinterests_to_avoid,
           heading: card.heading,
           subheading: card.subheading,
-          cta: card.cta,
-          claims_used: card.claims_used,
           publisher_notes: pubs.map((id) => {
             const p = PUBLISHERS.find((x) => x.id === id)!;
             return `${p.name}: ${p.notes}`;
@@ -549,12 +558,15 @@ function limitsProblem(o: CreativeOutput): string | null {
   return checkLimits(o).join('; ') || null;
 }
 
+const PRICE_FIELDS = new Set(['price_sensitivity', 'typical_aov_usd']);
+
 /** Model output → judgment: ids set by code, copied lists kept only where they really are the persona's own words. */
 function toJudgment(persona: Persona, o: ScorePersonaOutput, input: string): LlmPersonaJudgment {
   return {
     persona_id: persona.id,
     fit: o.fit,
-    conflicts: o.conflicts.filter((c) => containsSpan(input, c.input_quote)),
+    // Price is scored in code (price_fit); a price "conflict" from the model would count it twice.
+    conflicts: o.conflicts.filter((c) => containsSpan(input, c.input_quote) && !PRICE_FIELDS.has(c.field)),
     why: o.why,
     preferences_to_use: o.preferences_to_use.filter((x) => persona.messaging_preferences.includes(x)),
     disinterests_to_avoid: o.disinterests_to_avoid.filter((x) => persona.disinterested_in.includes(x)),

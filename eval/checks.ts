@@ -133,7 +133,9 @@ export function writeGuard(
     if (r.errors.length) problems.push(`${r.label}: errors ${r.errors.join(',')}`);
     if (r.unverified) problems.push(`${r.label}: unverified creative`);
   }
-  const lost = Object.keys(previousInputs).filter((i) => !newInputs.has(i));
+  // A sample must never leave the committed cache. A chip follow-up may: it exists only because the sample offered that
+  // chip, and when the understand prompt changes the chips, the old follow-up is no longer reachable from the page.
+  const lost = Object.keys(previousInputs).filter((i) => !newInputs.has(i) && !previousInputs[i].includes(' chip: '));
   if (lost.length) problems.push(`would drop ${lost.length} previously committed input(s): ${lost.map((i) => previousInputs[i]).join(', ')}`);
   return problems;
 }

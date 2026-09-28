@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { PromptModule } from '../lib/llm';
 import type { Offer } from '../lib/types';
 
-// Stage 5, check two. One batched call on the cheaper model, a different model from the writer.
+// Stage 5, check two. One call per card on the cheaper model, a different model from the writer.
 // Pass/fail per rule with a one-line fix. Regex grounding runs before this in code; the critic covers
 // what needs reading: implied claims, persona disinterests, publisher sensitivities, Disco's copy rules.
 
@@ -24,7 +24,7 @@ export const criticSchema = z.object({
       failures: z.array(
         z.object({
           rule: z.enum(CRITIC_RULES),
-          fix: z.string().describe('One line: what to change'),
+          fix: z.string().describe('One line: name the phrase that fails and what could replace it; never write replacement copy'),
         }),
       ),
     }),
@@ -35,7 +35,7 @@ export type CriticOutput = z.infer<typeof criticSchema>;
 
 const INSTRUCTIONS = `You review post-purchase ad copy against fixed rules. For each creative, list only the rules it fails, each with a one-line fix; an empty list means it passes every rule. Be strict and literal: when a rule is broken, list it. Rules:
 
-1. grounded: every claim in the heading and subheading is supported by the facts or the offer. Implied claims count (e.g. "vet-approved" when the fact says "vet-formulated" fails; "healthier" without a fact fails). A faithful paraphrase that adds no new claim passes.
+1. grounded: every claim in the heading and subheading is supported by the facts or the offer. Implied claims count (e.g. "dermatologist-approved" when the fact says "dermatologist-tested" fails; "healthier" without a fact fails). A faithful paraphrase that adds no new claim passes. How the shopper feels, or what gets easier for them, is framing, not a claim, and passes; fail only product attributes, results, comparisons or numbers the facts do not support.
 2. persona_fit: nothing in the copy matches an item in the persona's disinterests, and the copy uses the persona's preferences where it can.
 3. publisher_sensitivity: the copy does not do what the mapped publishers' notes warn about (e.g. unsubstantiated health claims for an audience "skeptical of unsubstantiated health claims"; loud or trendy language for a "conservative" audience).
 4. leads_with_outcome: the heading leads with the shopper's outcome or the offer, not the brand name.
@@ -55,8 +55,6 @@ export interface CriticArgs {
     disinterests_to_avoid: string[];
     heading: string;
     subheading: string;
-    cta: string;
-    claims_used: string[];
     /** Static notes of the publishers this creative maps to; never scores. */
     publisher_notes: string[];
   }[];
@@ -64,7 +62,7 @@ export interface CriticArgs {
 
 export const criticModule: PromptModule<CriticArgs, CriticOutput> = {
   id: 'critic',
-  promptVersion: '2',
+  promptVersion: '3',
   step: 'critic',
   instructions: INSTRUCTIONS,
   build: (a) =>
@@ -74,7 +72,7 @@ export const criticModule: PromptModule<CriticArgs, CriticOutput> = {
       `Creatives:\n${a.creatives
         .map(
           (c) =>
-            `- id ${c.id} | persona ${c.persona_name} | use: ${c.preferences_to_use.join(', ') || 'n/a'} | avoid: ${c.disinterests_to_avoid.join(', ') || 'n/a'}\n  heading: "${c.heading}"\n  subheading: "${c.subheading}"\n  cta: ${c.cta} | claims_used: ${c.claims_used.join(', ') || 'none'}\n  publisher notes: ${c.publisher_notes.join(' || ') || 'none'}`,
+            `- id ${c.id} | persona ${c.persona_name} | use: ${c.preferences_to_use.join(', ') || 'n/a'} | avoid: ${c.disinterests_to_avoid.join(', ') || 'n/a'}\n  heading: "${c.heading}"\n  subheading: "${c.subheading}"\n  publisher notes: ${c.publisher_notes.join(' || ') || 'none'}`,
         )
         .join('\n')}`,
     ].join('\n'),

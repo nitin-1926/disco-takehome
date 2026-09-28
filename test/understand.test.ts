@@ -11,8 +11,6 @@ const base: UnderstandOutput = {
   is_subscription: true,
   buyer_age: null,
   buyer_gender: 'unspecified',
-  origin: null,
-  target_geo: 'US',
   values: ['health', 'longevity'],
   tone: 'caring, expert',
   facts: [
@@ -22,7 +20,6 @@ const base: UnderstandOutput = {
   assumptions: [{ field: 'price', value: '$60-80', why: 'premium dog food subscription' }],
   triage: { clarity: 'clear', viability: 'strong', policy_banned: false, reason: 'Pet food sells on pet publishers.' },
   chips: [],
-  language: 'en',
 };
 const input = 'We sell premium dog food for senior dogs. Grain-free, vet-formulated, subscription-based.';
 

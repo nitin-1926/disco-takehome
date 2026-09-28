@@ -83,6 +83,11 @@ describe('write-cache guard', () => {
     expect(writeGuard([{ label: '#1', errors: [], unverified: true }], prev, new Set(['old input']))).toHaveLength(1);
     expect(writeGuard([{ label: '#1', errors: [], unverified: false }], prev, new Set(['new input']))[0]).toMatch(/drop 1/);
   });
+  test('a chip follow-up the sample no longer offers may drop; a sample may not', () => {
+    const prev = { 'sample text': '#8', 'old chip text': '#8 chip: Old reading' };
+    expect(writeGuard([], prev, new Set(['sample text', 'new chip text']))).toEqual([]);
+    expect(writeGuard([], prev, new Set(['new chip text']))[0]).toMatch(/drop 1.*#8$/);
+  });
   test('--write-cache with --bakeoff is refused before any work', () => {
     let code = 0;
     try {

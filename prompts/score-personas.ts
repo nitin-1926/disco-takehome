@@ -38,14 +38,14 @@ const publisherCards = publishers.map((p) => ({
 const INSTRUCTIONS = `You judge whether one shopper persona plausibly buys an advertiser's product, for an ad system that shows ads on e-commerce order-confirmation pages. Judge the persona on its own; other personas are judged separately on the same scale.
 
 FIT, 0-5, absolute scale:
-5 = the product sits in this persona's core affinities and matches how they buy. Example: vet-formulated pet food for a persona who reads pet-food labels.
+5 = the product sits in this persona's core affinities and matches how they buy. Example: clean-ingredient skincare for a persona whose affinities include clean beauty.
 4 = a clear fit through one core affinity or buying habit. Example: a meal-kit subscription for a persona whose affinities include subscriptions and household goods.
-3 = plausible on occasion: the persona buys this category sometimes or for someone else.
+3 = plausible on occasion: the persona buys this category sometimes or for someone else, or the pitch matches how they buy (a pitch built on low price for a persona who shops on price) even outside their core affinities.
 2 = a stretch: one weak link, e.g. a shared value but not the category.
 1 = unlikely: outside their affinities and against their price sensitivity.
 0 = the persona's description rules it out.
 
-CONFLICTS. List every clash between a persona field and the advertiser text, quoting both sides exactly: the persona field name and its value, and the span of the advertiser text. Examples of clashes: a persona who wants "last-minute shipping" against "ships in 6 weeks"; a persona with price_sensitivity "low" who wants "science-backed claims" against "we compete on price"; a persona disinterested in "luxury positioning" against "$1,200". No conflict is fine; do not invent one.
+CONFLICTS. List every clash between a persona field and the advertiser text, quoting both sides exactly: the persona field name and its value, and the span of the advertiser text. Examples of clashes: a persona who wants "same-day delivery" against "made to order in eight weeks"; a persona disinterested in "subscription-only" against "available only as a monthly plan". Price is not a conflict: code already scores price against the persona, so never list price_sensitivity or typical_aov_usd, and do not lower fit for price. No conflict is fine; do not invent one.
 
 DETAIL:
 - preferences_to_use: the persona's messaging_preferences this product can honour, copied exactly; at most three.
@@ -94,7 +94,7 @@ export function personaScoringArgs(input: string, persona: Persona, candidateIds
 
 export const scorePersonaModule: PromptModule<ScorePersonaArgs, ScorePersonaOutput> = {
   id: 'score-persona',
-  promptVersion: '1',
+  promptVersion: '2',
   step: 'score_personas',
   instructions: INSTRUCTIONS,
   build: ({ input, persona, candidate_ids }) =>

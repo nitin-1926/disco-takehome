@@ -17,15 +17,12 @@ function profile(p: Partial<AdvertiserProfile> & Pick<AdvertiserProfile, 'input'
     is_subscription: false,
     buyer_age: null,
     buyer_gender: 'unspecified',
-    origin: null,
-    target_geo: 'US',
     values: [],
     tone: '',
     facts: [],
     assumptions: [],
     triage: clearStrong,
     chips: [],
-    language: 'en',
     ...p,
   };
 }
@@ -56,7 +53,6 @@ export const profiles: Record<SampleId, AdvertiserProfile> = {
     product: 'hand-poured soy candles',
     price: { low: 25, high: 40, basis: 'assumed' },
     price_tier: 'mid',
-    origin: 'Vermont',
     values: ['handmade', 'natural soy wax', 'no synthetic fragrances', 'gifting'],
     tone: 'warm, artisanal',
     facts: [
@@ -106,7 +102,6 @@ export const profiles: Record<SampleId, AdvertiserProfile> = {
     price: { low: 1200, high: 1200, basis: 'stated' },
     price_tier: 'luxury',
     buyer_gender: 'female',
-    origin: 'Italy',
     values: ['craftsmanship', 'custom-fit', 'Italian-made'],
     tone: 'refined, understated luxury',
     facts: [
@@ -139,7 +134,6 @@ export const profiles: Record<SampleId, AdvertiserProfile> = {
     product: 'linen bedding made in Portugal',
     price: { low: 180, high: 320, basis: 'assumed' },
     price_tier: 'premium',
-    origin: 'Portugal',
     values: ['breathable linen', 'grown-up design', 'made in Portugal'],
     tone: 'dry, confident, grown-up',
     facts: [

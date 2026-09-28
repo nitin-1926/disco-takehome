@@ -448,8 +448,6 @@ async function bakeoff(runs: Run[], exps: Expectation[]): Promise<string> {
             disinterests_to_avoid: j.disinterests_to_avoid,
             heading: card.heading,
             subheading: card.subheading,
-            cta: card.cta,
-            claims_used: card.claims_used,
             publisher_notes: [...new Set(j.publisher_ids)].sort().map((id) => `${pubName(id)}: ${PUBLISHERS.find((p) => p.id === id)?.notes}`),
           },
         ],

@@ -131,6 +131,16 @@ describe('runPipeline (mocked LLM)', () => {
     expect(calls2).toEqual(calls1);
   });
 
+  test('a headline that repeats an earlier card goes back through revise; the first card keeps its copy', async () => {
+    const base = h.responders.creative;
+    h.responders.creative = (a, o, n) => ({ ...(base(a, o, n) as object), heading: 'One less thing to remember' });
+    const r = await runPipeline(input, normalizeSettings(), ctx(), { today: '2026-09-28' });
+    expect(r.creatives[0].revised_from).toBeNull();
+    expect(r.creatives.slice(1).every((c) => c.revised_from?.heading === 'One less thing to remember')).toBe(true);
+    const revises = ids('creative-revise').map((l) => JSON.stringify(l.args));
+    expect(revises.every((x) => x.includes('heading repeats c1'))).toBe(true);
+  });
+
   test('scoring misses an id twice → scoring error, no config; personas branch still completes', async () => {
     const missing = publisherDims[1].filter((d) => d.publisher_id !== 'pub_020');
     h.responders['score-publishers'] = () => ({ scores: missing, comparatives: [] });

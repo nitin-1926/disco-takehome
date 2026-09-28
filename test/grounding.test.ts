@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { Creative, Fact, Offer } from '@/lib/types';
-import { checkLimits, groundCreative, regexFlags, validateClaims } from '@/lib/grounding';
+import { checkLimits, groundCreative, regexFlags, sameHeading, validateClaims } from '@/lib/grounding';
 
 const facts: Fact[] = [
   { id: 'f1', text: 'Custom-fit leather handbags, Italian-made, handcrafted in Florence' },
@@ -47,6 +47,11 @@ describe('regexFlags', () => {
     expect(regexFlags('Join 12,000 dog owners.', f, null).some((x) => x.includes('12,000'))).toBe(true);
     expect(regexFlags('20% off with code WELCOME15.', f, { type: 'pct_off', amount: 20, code: 'WELCOME15' })).toEqual([]);
   });
+  test('friction words, exclamation marks and emoji break the copy rules', () => {
+    expect(regexFlags('Sign up today!', facts, null).filter((f) => f.includes('copy rules'))).toHaveLength(2);
+    expect(regexFlags('Treat yourself 🎉', facts, null).some((f) => f.includes('copy rules'))).toBe(true);
+    expect(regexFlags('Handcrafted in Florence', facts, null)).toEqual([]);
+  });
   test('numbers in facts pass; numbers not in facts flag; dollar amounts normalised', () => {
     expect(regexFlags('Ships in 6 weeks. From $1200.', facts, null)).toEqual([]);
     expect(regexFlags('Ships in 3 weeks.', facts, null).some((f) => f.includes('3'))).toBe(true);
@@ -69,6 +74,15 @@ describe('regexFlags', () => {
   });
   test('"grain-free" is not a discount word', () => {
     expect(regexFlags('Grain-free, vet-formulated', [{ id: 'f', text: 'Grain-free, vet-formulated' }], null)).toEqual([]);
+  });
+});
+
+describe('sameHeading', () => {
+  test('catches repeats and near-repeats, not headlines that merely share a word or two', () => {
+    expect(sameHeading('One less thing to remember', 'One less thing to remember')).toBe(true);
+    expect(sameHeading('A gift that feels considered', 'Give a gift that feels considered')).toBe(true);
+    expect(sameHeading('A more considered bedroom', 'A more considered wind-down')).toBe(false);
+    expect(sameHeading('Keep your routine consistent', 'Keep your routine, cut the cost')).toBe(false);
   });
 });
 

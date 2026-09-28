@@ -141,6 +141,16 @@ describe('runPipeline (mocked LLM)', () => {
     expect(revises.every((x) => x.includes('heading repeats c1'))).toBe(true);
   });
 
+  test('a subscription product always conflicts with a persona that avoids subscription-only, whatever the model says', async () => {
+    const base = h.responders['score-persona'];
+    h.responders['score-persona'] = (a, o, n) => ({ ...(base(a, o, n) as object), conflicts: [] });
+    const r = await runPipeline(input, normalizeSettings(), ctx(), { today: '2026-09-28' });
+    const gifter = r.judgments!.find((j) => j.persona_id === 'persona_010')!;
+    expect(gifter.conflicts.map((c) => c.persona_value)).toEqual(['subscription-only']);
+    expect(input.toLowerCase()).toContain(gifter.conflicts[0].input_quote.toLowerCase());
+    expect(r.judgments!.filter((j) => j.persona_id !== 'persona_010').every((j) => j.conflicts.length === 0)).toBe(true);
+  });
+
   test('scoring misses an id twice → scoring error, no config; personas branch still completes', async () => {
     const missing = publisherDims[1].filter((d) => d.publisher_id !== 'pub_020');
     h.responders['score-publishers'] = () => ({ scores: missing, comparatives: [] });

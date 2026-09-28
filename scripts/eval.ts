@@ -244,7 +244,7 @@ function gridSearch(runs: Run[], exps: Expectation[]): string {
     const checks = set.flatMap((x) => publisherChecks(exps.find((e) => e.sample === x.sample)!, rescore(x, w, t)).map((c) => ({ ...c, name: `${x.label} ${c.name}` })));
     return { pass: checks.filter((c) => c.pass).length, total: checks.length, failed: checks.filter((c) => !c.pass).map((c) => c.name) };
   };
-  const combos: { w: Weights; t: Thresholds; pass: number }[] = [];
+  const combos: { w: Weights; t: Thresholds; pass: number; failed: string[] }[] = [];
   for (let tone = 0.1; tone <= 0.701; tone += 0.05) {
     for (let audience = 0.1; audience <= 0.701; audience += 0.05) {
       const price = 1 - tone - audience;
@@ -253,7 +253,8 @@ function gridSearch(runs: Run[], exps: Expectation[]): string {
         for (const weak of [0.3, 0.35, 0.4]) {
           const w = { tone: +tone.toFixed(2), audience: +audience.toFixed(2), price: +price.toFixed(2) };
           const t = { ...THRESHOLDS, recommended: rec, weak };
-          combos.push({ w, t, pass: evalSet(tuning, w, t).pass });
+          const e = evalSet(tuning, w, t);
+          combos.push({ w, t, pass: e.pass, failed: e.failed });
         }
       }
     }
@@ -272,6 +273,11 @@ function gridSearch(runs: Run[], exps: Expectation[]): string {
   L.push(`- Combos: ${combos.length} (weights in 0.05 steps, each ≥ 0.1; recommended ∈ {0.5, 0.55, 0.6, 0.65}; weak ∈ {0.3, 0.35, 0.4}).`);
   L.push(`- Current (tone ${WEIGHTS.tone} / audience ${WEIGHTS.audience} / price ${WEIGHTS.price}; rec ${THRESHOLDS.recommended}, weak ${THRESHOLDS.weak}): ${current.pass}/${current.total}.${current.failed.length ? ` Failing: ${current.failed.join('; ')}.` : ''}`);
   L.push(`- Best: ${best}/${current.total}, reached by ${plateau.length} combos (${((plateau.length / combos.length) * 100).toFixed(0)}% of the grid). Plateau centre: tone ${centre.tone} / audience ${centre.audience} / price ${centre.price}; rec ${centreT.recommended}, weak ${centreT.weak} → ${evalSet(tuning, centre, centreT).pass}/${current.total}.`);
+  // Which checks the off-plateau combos fail, so a robustness number comes with its reason.
+  const failCounts = new Map<string, number>();
+  for (const c of combos) for (const f of c.failed) failCounts.set(f, (failCounts.get(f) ?? 0) + 1);
+  const topFails = [...failCounts].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  if (topFails.length) L.push(`- Off the plateau, the checks that fail: ${topFails.map(([f, n]) => `${f} (${n} combos)`).join('; ')}.`);
   const hc = evalSet(held, WEIGHTS, THRESHOLDS);
   const hn = evalSet(held, centre, centreT);
   L.push(`- Held-out controls (#2, #11, #12): current ${hc.pass}/${hc.total}, plateau centre ${hn.pass}/${hn.total}.${hn.failed.length ? ` Failing at centre: ${hn.failed.join('; ')}.` : ''}`);

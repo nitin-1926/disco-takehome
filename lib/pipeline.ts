@@ -314,7 +314,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
       // persona is reported once and the pick runs on the rest.
       if (ok.length < 3) throw firstError ?? new LlmError('provider_error', 'score-persona', 'too few personas judged');
       if (firstError) fail('score_personas', firstError);
-      result.judgments = ok.map(({ persona, r }) => toJudgment(persona, r!.output, input));
+      result.judgments = ok.map(({ persona, r }) => toJudgment(persona, r!.output, input, profile));
       // The pick never depends on publisher weights; the publisher mapping is attached once scoring lands.
       result.personas = scorePersonas(profile, PERSONAS, result.judgments, [], { max: CREATIVES_MAX });
       const sources = ok.map((x) => x.r!.source);
@@ -561,12 +561,19 @@ function limitsProblem(o: CreativeOutput): string | null {
 const PRICE_FIELDS = new Set(['price_sensitivity', 'typical_aov_usd']);
 
 /** Model output → judgment: ids set by code, copied lists kept only where they really are the persona's own words. */
-function toJudgment(persona: Persona, o: ScorePersonaOutput, input: string): LlmPersonaJudgment {
+function toJudgment(persona: Persona, o: ScorePersonaOutput, input: string, profile: AdvertiserProfile): LlmPersonaJudgment {
+  // Price is scored in code (price_fit); a price "conflict" from the model would count it twice.
+  const conflicts = o.conflicts.filter((c) => containsSpan(input, c.input_quote) && !PRICE_FIELDS.has(c.field));
+  // A persona that avoids subscription-only products against a product the profile marks as a subscription is a
+  // yes/no fact, so code states it rather than hoping the model notices.
+  const span = input.match(/\bsubscri\w*(?:[ -]\w+)?/i)?.[0];
+  if (profile.is_subscription && span && persona.disinterested_in.includes('subscription-only') && !conflicts.some((c) => c.persona_value === 'subscription-only')) {
+    conflicts.push({ field: 'disinterested_in', persona_value: 'subscription-only', input_quote: span });
+  }
   return {
     persona_id: persona.id,
     fit: o.fit,
-    // Price is scored in code (price_fit); a price "conflict" from the model would count it twice.
-    conflicts: o.conflicts.filter((c) => containsSpan(input, c.input_quote) && !PRICE_FIELDS.has(c.field)),
+    conflicts,
     why: o.why,
     preferences_to_use: o.preferences_to_use.filter((x) => persona.messaging_preferences.includes(x)),
     disinterests_to_avoid: o.disinterests_to_avoid.filter((x) => persona.disinterested_in.includes(x)),

@@ -150,13 +150,14 @@ async function main() {
     L.push('', '## Live runs', '', '| input | first byte | understand | done | calls | cost | cold | critic skipped | errors | slowest calls |', '|---|---|---|---|---|---|---|---|---|---|');
     const lives: Outcome[] = [];
     for (const input of inputs) {
-      const o = await run({ input });
+      // live: true so a Redis hit from an earlier verification cannot pass for a live run.
+      const o = await run({ input, live: true });
       lives.push(o);
       L.push(`| ${input.slice(0, 48)}... | ${s(o.firstByteMs)} | ${s(o.understandMs)} | ${s(o.ms)} | ${o.liveCalls}/${o.calls} | $${o.costLive.toFixed(4)} | ${o.cold ? 'yes' : 'no'} | ${o.unverified} | ${o.errors.join(', ') || '-'} | ${o.perCall} |`);
     }
     const done = lives.map((o) => o.ms);
     L.push('', `Live wall: p50 ${s(pct(done, 50))}, p95 ${s(pct(done, 95))}, max ${s(Math.max(...done))}; first byte max ${s(Math.max(...lives.map((o) => o.firstByteMs ?? 0)))}.`, '');
-    check(lives.every((o) => o.status === 200 && o.done && o.errors.length === 0 && o.calls > 0), 'five live advertisers complete with no stage errors');
+    check(lives.every((o) => o.status === 200 && o.done && o.errors.length === 0 && o.calls > 0 && o.liveCalls === o.calls), 'five live advertisers complete, every call live, no stage errors');
     check(pct(done, 95) <= 30_000, `live p95 within 30 s (${s(pct(done, 95))})`);
 
     // ?live=1 on a sample: every call live even though the sample is committed.
@@ -165,7 +166,7 @@ async function main() {
     check(lf.status === 200 && lf.liveCalls === lf.calls && lf.calls > 0, '?live=1 bypasses the cache and completes');
 
     // One client, two concurrent live runs: the second is refused while the first holds the lock.
-    const [a, b] = await Promise.all([run({ input: 'Waxed canvas tote bags made in Maine, $95.' }), (async () => (await new Promise((r) => setTimeout(r, 1500)), run({ input: 'Loose-leaf oolong tea from a Taiwanese family farm.' })))()]);
+    const [a, b] = await Promise.all([run({ input: 'Waxed canvas tote bags made in Maine, $95.', live: true }), (async () => (await new Promise((r) => setTimeout(r, 1500)), run({ input: 'Loose-leaf oolong tea from a Taiwanese family farm.', live: true })))()]);
     check(a.status === 200 && b.status === 429 && b.error === 'in_progress', `same client, concurrent live runs: first streams (${a.status}), second refused by the lock (${b.status} ${b.error ?? ''})`);
 
     await cancelCheck(L, check);

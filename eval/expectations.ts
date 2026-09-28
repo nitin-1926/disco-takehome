@@ -160,10 +160,9 @@ export const EXPECTATIONS: Expectation[] = [
     clarity: ['clear'],
     viability: ['strong'],
     cpc: true,
-    personasPicked: ['The Fitness Enthusiast'],
-    topPersona: 'The Fitness Enthusiast',
-    personaConflict: ['The Wellness Optimizer'],
-    personasNotClean: ['The Wellness Optimizer'],
+    // A price-led pitch is a buying-habit match for the shopper who buys on price; price itself is never a conflict.
+    // No top persona: the Fitness Enthusiast and the Wellness Optimizer both fit supplements at 5, so first place is a tie.
+    personasPicked: ['The Fitness Enthusiast', 'The Value-Conscious Shopper'],
   },
   {
     sample: 14,

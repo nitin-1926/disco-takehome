@@ -43,7 +43,7 @@ export function normalizeSettings(raw: RawSettings = {}): Settings {
   const event = EVENTS.includes(raw.conversionEvent as ConversionEvent) ? (raw.conversionEvent as ConversionEvent) : null;
   const offer = normalizeOffer(raw.offer);
   return {
-    budgetUsd: budget ? Math.min(Math.round(budget), BUDGET_MAX_USD) : DEFAULT_SETTINGS.budgetUsd,
+    budgetUsd: budget ? Math.min(Math.max(1, Math.round(budget)), BUDGET_MAX_USD) : DEFAULT_SETTINGS.budgetUsd,
     durationDays: duration ? Math.min(Math.round(duration), DURATION_MAX_DAYS) : DEFAULT_SETTINGS.durationDays,
     conversionEvent: event ?? DEFAULT_SETTINGS.conversionEvent,
     offer,

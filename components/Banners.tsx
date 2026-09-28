@@ -2,9 +2,21 @@
 
 import { ArrowClockwise, Info, WarningCircle } from '@phosphor-icons/react';
 import type { RunState } from '@/lib/sse-client';
+import type { GateError } from '@/lib/types';
 import { STAGE_LABEL } from './format';
 
 // Run-level problems, inline at the top of the plan (never toasts). Stage failures also show inside their section.
+
+const TITLE: Partial<Record<GateError, string>> = {
+  rate_limited: 'Live-run limit reached',
+  in_progress: 'A run is already going',
+  spend_cap: 'Live runs paused',
+  daily_cap: 'Live runs paused until tomorrow',
+  key_missing: 'Live runs unavailable',
+  store_unavailable: 'Live runs unavailable',
+};
+
+const waitText = (sec: number) => (sec >= 5400 ? `${Math.ceil(sec / 3600)} h` : sec >= 90 ? `${Math.ceil(sec / 60)} min` : `${sec} s`);
 export function Banners({ state, onRunLive }: { state: RunState; onRunLive: () => void }) {
   const e = state.httpError;
   const stale = state.errors.find((x) => x.code === 'cache_miss');
@@ -12,8 +24,8 @@ export function Banners({ state, onRunLive }: { state: RunState; onRunLive: () =
   const items: React.ReactNode[] = [];
 
   if (e && e.status !== 400) {
-    const retry = e.retryAfter ? ` Try again in ${e.retryAfter >= 90 ? `${Math.ceil(e.retryAfter / 60)} min` : `${e.retryAfter} s`}.` : '';
-    items.push(<Banner key="http" tone="attention" title={e.status === 429 ? 'Live runs paused for you' : e.status === 503 ? 'Live runs unavailable' : 'Run stopped'} body={`${e.message}${e.status === 429 ? retry : ''}`} />);
+    const retry = e.retryAfter ? ` Try again in ${waitText(e.retryAfter)}.` : '';
+    items.push(<Banner key="http" tone="attention" title={TITLE[e.error as GateError] ?? 'Run stopped'} body={`${e.message}${retry}`} />);
   }
   if (stale) {
     items.push(
@@ -39,7 +51,7 @@ export function Banner({ tone, title, body, note, children }: { tone: 'attention
       <div className="text-sm">
         <p className="font-medium">{title}</p>
         <p className="mt-0.5 text-ink-2">{body}</p>
-        {note && <p className="mt-0.5 text-ink-3">{note}</p>}
+        {note && <p className="mt-0.5 text-ink-2">{note}</p>}
         {children}
       </div>
     </div>

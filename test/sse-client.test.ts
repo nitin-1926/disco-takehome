@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { createParser, initialState, reduce, type Action, type RunState } from '@/lib/sse-client';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { createParser, initialState, reduce, startRun, type Action, type RunState } from '@/lib/sse-client';
 import type { RunEvent } from '@/lib/types';
 import { profiles } from './fixtures/llm-dims';
 
@@ -78,5 +78,36 @@ describe('SSE parser + reducer', () => {
     let s = play([frame(1, { type: 'done', summary })]);
     s = reduce(s, { type: 'network_error', message: 'x' });
     expect(s.status).toBe('done');
+  });
+});
+
+describe('startRun', () => {
+  const sse = (...events: object[]) => events.map((e, i) => `id: ${i + 1}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  const respond = (body: string, init: ResponseInit = { headers: { 'content-type': 'text/event-stream' } }) => {
+    vi.stubGlobal('fetch', async () => new Response(body, init));
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  test('a stream that closes without done ends the run as failed, not streaming forever', async () => {
+    respond(sse({ type: 'stage', stage: 'understand', status: 'started' }));
+    const actions: Action[] = [];
+    await startRun({ input: 'x' }, (a) => actions.push(a), new AbortController().signal);
+    expect(actions.at(-1)).toMatchObject({ type: 'network_error' });
+  });
+
+  test('a stream that ends in done dispatches no error', async () => {
+    respond(sse({ type: 'done', summary: { run_id: 'r', cost_live_usd: 0, cost_replayed_usd: 0, calls: [], total_ms: 1, cold: false, skipped: [], errors: [] } }));
+    const actions: Action[] = [];
+    await startRun({ input: 'x' }, (a) => actions.push(a), new AbortController().signal);
+    expect(actions.some((a) => a.type === 'network_error')).toBe(false);
+  });
+
+  test('a refusal read after the run was superseded is dropped', async () => {
+    const ac = new AbortController();
+    // The user starts a new run while this refusal's body is still being read.
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 429, body: null, json: async () => (ac.abort(), { error: 'rate_limited', message: 'x' }) }));
+    const actions: Action[] = [];
+    await startRun({ input: 'x' }, (a) => actions.push(a), ac.signal);
+    expect(actions.map((a) => a.type)).toEqual(['start']);
   });
 });

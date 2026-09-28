@@ -145,11 +145,14 @@ function useAnnouncer(state: RunState, set: (s: string) => void) {
       return;
     }
     if (!before) return;
+    // One message per render: several stages can settle in one batch, and a second set() would replace the first.
+    const changes: string[] = [];
     for (const s of STAGES) {
       const now = state.stages[s].status;
       if (now !== before[s].status && (now === 'done' || now === 'error' || now === 'skipped')) {
-        set(`${STAGE_LABEL[s]}: ${now === 'done' ? 'done' : now === 'error' ? 'failed' : 'skipped'}.`);
+        changes.push(`${STAGE_LABEL[s]}: ${now === 'done' ? 'done' : now === 'error' ? 'failed' : 'skipped'}.`);
       }
     }
+    if (changes.length) set(changes.join(' '));
   }, [state.stages, state.status, state.summary, set]);
 }

@@ -205,11 +205,14 @@ export async function startRun(req: RunRequest, dispatch: (a: Action) => void, s
   if (signal.aborted) return;
   if (!res.ok || !res.body) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string; retry_after?: number };
+    if (signal.aborted) return; // superseded while reading the refusal: it must not fail the next run
     dispatch({ type: 'http_error', error: { status: res.status, error: body.error ?? 'unknown', message: body.message ?? 'Something went wrong.', retryAfter: body.retry_after } });
     return;
   }
   // A superseded run must not write into the next run's state.
+  let sawDone = false;
   const parser = createParser((id, event) => {
+    if (event.type === 'done') sawDone = true;
     if (!signal.aborted) dispatch({ type: 'event', id, event });
   });
   const reader = res.body.getReader();
@@ -221,6 +224,8 @@ export async function startRun(req: RunRequest, dispatch: (a: Action) => void, s
       parser.feed(decoder.decode(value, { stream: true }));
     }
     parser.end();
+    // Every run ends in `done`; a stream that closed without it (platform cut, crash) must not leave the page streaming.
+    if (!sawDone && !signal.aborted) dispatch({ type: 'network_error', message: 'The run ended early. Try again.' });
   } catch {
     if (!signal.aborted) dispatch({ type: 'network_error', message: 'The connection dropped mid-run. Try again.' });
   }

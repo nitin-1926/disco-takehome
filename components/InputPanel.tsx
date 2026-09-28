@@ -103,7 +103,8 @@ export function InputPanel(p: Props) {
         </ul>
       </div>
 
-      <SettingsPanel applied={p.applied} onApply={p.onApply} disabled={p.streaming} />
+      {/* Keyed on the applied settings: a sample click resets them, and the form must reset with them. */}
+      <SettingsPanel key={JSON.stringify(p.applied)} applied={p.applied} onApply={p.onApply} disabled={p.streaming} />
     </section>
   );
 }
@@ -136,7 +137,7 @@ function SettingsPanel({ applied, onApply, disabled }: { applied: RunSettings; o
   const a = Number(amount);
   const offerMeta = OFFERS.find((o) => o.value === offerType)!;
   const errors = {
-    budget: !(b > 0 && b <= BUDGET_MAX_USD) ? `Enter a budget between $1 and $${BUDGET_MAX_USD.toLocaleString('en-US')}.` : null,
+    budget: !(b >= 1 && b <= BUDGET_MAX_USD) ? `Enter a budget between $1 and $${BUDGET_MAX_USD.toLocaleString('en-US')}.` : null,
     days: !(Number.isInteger(d) && d >= 1 && d <= DURATION_MAX_DAYS) ? `Whole days, 1 to ${DURATION_MAX_DAYS}.` : null,
     amount: offerMeta.amount && !(a > 0 && (offerMeta.amount !== '%' || a < 100)) ? (offerMeta.amount === '%' ? 'A percent between 1 and 99.' : 'A positive amount.') : null,
   };
@@ -169,10 +170,10 @@ function SettingsPanel({ applied, onApply, disabled }: { applied: RunSettings; o
       >
         <div className="grid grid-cols-2 gap-3">
           <Field id={`${id}-budget`} label="Budget (USD)" error={errors.budget}>
-            <input id={`${id}-budget`} inputMode="numeric" value={budget} onChange={(e) => setBudget(e.target.value)} className={field} aria-invalid={!!errors.budget} />
+            <input id={`${id}-budget`} inputMode="numeric" value={budget} onChange={(e) => setBudget(e.target.value)} className={field} aria-invalid={!!errors.budget} aria-describedby={errors.budget ? `${id}-budget-error` : undefined} />
           </Field>
           <Field id={`${id}-days`} label="Flight (days)" error={errors.days}>
-            <input id={`${id}-days`} inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} className={field} aria-invalid={!!errors.days} />
+            <input id={`${id}-days`} inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} className={field} aria-invalid={!!errors.days} aria-describedby={errors.days ? `${id}-days-error` : undefined} />
           </Field>
         </div>
         <Field id={`${id}-event`} label="Conversion event">
@@ -197,7 +198,7 @@ function SettingsPanel({ applied, onApply, disabled }: { applied: RunSettings; o
           <div className="grid grid-cols-2 gap-3">
             {offerMeta.amount && (
               <Field id={`${id}-amount`} label={offerMeta.amount === '%' ? 'Percent' : 'Amount (USD)'} error={errors.amount}>
-                <input id={`${id}-amount`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className={field} aria-invalid={!!errors.amount} />
+                <input id={`${id}-amount`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className={field} aria-invalid={!!errors.amount} aria-describedby={errors.amount ? `${id}-amount-error` : undefined} />
               </Field>
             )}
             <Field id={`${id}-code`} label="Promo code (optional)">
@@ -228,7 +229,7 @@ function Field({ id, label, error, children }: { id: string; label: string; erro
       </label>
       {children}
       {error && (
-        <p className="text-xs text-accent" role="alert">
+        <p id={`${id}-error`} className="text-xs text-accent" role="alert">
           {error}
         </p>
       )}

@@ -27,7 +27,7 @@ export function Creatives({ state }: { state: RunState }) {
       return (
         <div className="grid grid-cols-1 gap-5">
           {Array.from({ length: n }, (_, i) => (
-            <PendingCard key={i} p={picked[i]} failed={st.status === 'error' || state.stages.score_personas.status === 'error'} />
+            <PendingCard key={i} p={picked[i]} failed={st.status === 'error' || (state.stages.score_personas.status === 'error' && !state.personas)} />
           ))}
         </div>
       );

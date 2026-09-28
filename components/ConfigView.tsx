@@ -4,9 +4,12 @@ import { CaretDown, Check, Copy, DownloadSimple, WarningCircle } from '@phosphor
 import { useState } from 'react';
 import type { RunState } from '@/lib/sse-client';
 import { Section, Skeleton } from './ProfileCard';
-import { pct, pubName, slug, usd } from './format';
+import { pct, personaName, pubName, slug, usd } from './format';
+import { useDetail } from './ViewMode';
 
 export function ConfigView({ state }: { state: RunState }) {
+  const detail = useDetail();
+  const title = detail ? 'Campaign config' : 'Campaign plan';
   const cfg = state.config;
   const st = state.stages.config;
   const [copied, setCopied] = useState(false);
@@ -14,11 +17,17 @@ export function ConfigView({ state }: { state: RunState }) {
   if (!cfg) {
     if (st.status === 'skipped' && state.mode === 'stop' && !state.profile.triage.policy_banned) return null;
     return (
-      <Section title="Campaign config" id="config">
+      <Section title={title} id="config">
         {st.status === 'skipped' || st.status === 'error' ? <p className="text-sm text-ink-2">No config: {st.reason ?? 'an earlier step failed.'}</p> : <Skeleton lines={5} />}
       </Section>
     );
   }
+  // Same reading as the publisher rows: the personas that shop there, or every ad rotating when none does.
+  const adsOn = (publisherId: string, ids: string[]) => {
+    const matched = state.creatives.filter((c) => !c.error && c.publisher_ids.includes(publisherId));
+    if (!matched.length) return `all ${ids.length}, rotating`;
+    return matched.map((c) => personaName(c.persona_id).replace(/^The /, '')).join(', ');
+  };
   const json = JSON.stringify(cfg, null, 2);
   const copy = async () => {
     try {
@@ -39,7 +48,7 @@ export function ConfigView({ state }: { state: RunState }) {
   };
 
   return (
-    <Section title="Campaign config" id="config">
+    <Section title={title} id="config">
       <div className="arrive grid grid-cols-1 gap-6">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-panel border border-line bg-surface p-4 text-sm sm:grid-cols-4">
           <Stat label="Budget" value={usd(cfg.budget.total_usd)} sub={cfg.budget.total_usd > 0 ? `${usd(cfg.budget.daily_cap_usd)} a day` : 'nothing to spend'} />
@@ -71,6 +80,7 @@ export function ConfigView({ state }: { state: RunState }) {
                   <th scope="col" className="px-4 py-2 text-right font-normal">Budget</th>
                   <th scope="col" className="px-4 py-2 text-right font-normal">Conversions</th>
                   <th scope="col" className="px-4 py-2 text-right font-normal">Inventory used</th>
+                  <th scope="col" className="px-4 py-2 font-normal">Ads</th>
                 </tr>
               </thead>
               <tbody className="tabular font-mono text-[13px]">
@@ -84,6 +94,7 @@ export function ConfigView({ state }: { state: RunState }) {
                     <td className="px-4 py-2 text-right">{usd(p.allocation_usd)}</td>
                     <td className="px-4 py-2 text-right">{p.expected_conversions}</td>
                     <td className="px-4 py-2 text-right">{p.inventory_used_pct < 0.1 ? '<0.1' : p.inventory_used_pct}%</td>
+                    <td className="px-4 py-2 font-sans text-xs text-ink-2">{adsOn(p.publisher_id, p.creative_ids)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -113,7 +124,7 @@ export function ConfigView({ state }: { state: RunState }) {
 
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-medium">Config JSON</h3>
+            <h3 className="text-sm font-medium">{detail ? 'Config JSON' : 'Export the plan'}</h3>
             <div className="flex gap-2">
               <button type="button" onClick={copy} className="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-line bg-surface px-3 text-sm transition active:translate-y-px" aria-live="polite">
                 {copied ? <Check size={14} weight="bold" className="text-ok" aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? 'Copied' : 'Copy'}
@@ -123,9 +134,13 @@ export function ConfigView({ state }: { state: RunState }) {
               </button>
             </div>
           </div>
-          <pre className="tabular max-h-[520px] overflow-auto rounded-panel bg-sunken p-4 font-mono text-[12.5px] leading-relaxed" tabIndex={0} aria-label="Campaign config as JSON">
-            <Json value={cfg} indent={0} />
-          </pre>
+          {detail ? (
+            <pre className="tabular max-h-[520px] overflow-auto rounded-panel bg-sunken p-4 font-mono text-[12.5px] leading-relaxed" tabIndex={0} aria-label="Campaign config as JSON">
+              <Json value={cfg} indent={0} />
+            </pre>
+          ) : (
+            <p className="text-xs text-ink-3">The plan as JSON, ready for an ad server: targeting, budget, bid, placements, ads, exclusions and every assumed number.</p>
+          )}
         </div>
       </div>
     </Section>

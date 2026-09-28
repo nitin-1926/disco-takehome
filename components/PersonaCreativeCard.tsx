@@ -5,10 +5,13 @@ import type { RunState } from '@/lib/sse-client';
 import type { Creative, PersonaScore } from '@/lib/types';
 import { Section } from './ProfileCard';
 import { persona, personaName, pubName, RULE_LABEL } from './format';
+import { useDetail } from './ViewMode';
 
 const LABEL: Record<string, string> = { strong: 'Strong', moderate: 'Moderate', weak: 'Weak', stretch: 'Stretch' };
+const NO_PUBLISHER = 'shops on none of the recommended publishers, so this ad rotates on every placement';
 
 export function Creatives({ state }: { state: RunState }) {
+  const detail = useDetail();
   const st = state.stages.creative;
   if (state.status === 'idle' || !state.profile || state.mode === 'stop') return null;
   const t = state.triage;
@@ -35,7 +38,7 @@ export function Creatives({ state }: { state: RunState }) {
     return (
       <div className="grid divide-y divide-line">
         {state.creatives.map((c, i) => (
-          <Card key={c.id} c={c} p={state.personas?.find((x) => x.persona_id === c.persona_id)} facts={state.profile!.facts} i={i} checking={state.stages.critic.status === 'started' || state.stages.revise.status === 'started'} />
+          <Card key={c.id} c={c} p={state.personas?.find((x) => x.persona_id === c.persona_id)} facts={state.profile!.facts} i={i} checking={state.stages.critic.status === 'started' || state.stages.revise.status === 'started'} detail={detail} />
         ))}
       </div>
     );
@@ -43,8 +46,8 @@ export function Creatives({ state }: { state: RunState }) {
 
   const passed = state.personas?.filter((p) => !p.picked) ?? [];
   return (
-    <Section title="Creatives" id="creatives">
-      <p className="-mt-2 mb-5 max-w-[65ch] text-sm text-ink-2">One ad per persona, shown where it would run: on the order-confirmation page of a publisher that persona shops on.</p>
+    <Section title={detail ? 'Creatives' : 'Your ads'} id="creatives">
+      <p className="-mt-2 mb-5 max-w-[65ch] text-sm text-ink-2">One ad per kind of shopper, shown where it would run: on the order-confirmation page of a publisher that shopper buys from.</p>
       {body}
       {passed.length > 0 && (
         <details className="mt-5 rounded-panel border border-line">
@@ -58,8 +61,10 @@ export function Creatives({ state }: { state: RunState }) {
             {passed.map((p) => (
               <li key={p.persona_id} className="grid gap-0.5 sm:grid-cols-[14rem_minmax(0,1fr)_3rem] sm:gap-3">
                 <span className="font-medium">{personaName(p.persona_id)}</span>
-                <span className="text-ink-2">{p.conflicts.length ? `Clashes with "${p.conflicts[0].input_quote}" (${p.conflicts[0].field.replace(/_/g, ' ')}: ${p.conflicts[0].persona_value})` : p.why}</span>
-                <span className="tabular font-mono text-xs text-ink-3 sm:text-right">{p.score.toFixed(2)}</span>
+                <span className="text-ink-2">
+                  {p.conflicts.length ? `Clashes with "${p.conflicts[0].input_quote}" (${p.conflicts[0].field.replace(/_/g, ' ')}: ${p.conflicts[0].persona_value})` : p.publisher_match ? p.why : `${p.why}; shops on none of the recommended publishers`}
+                </span>
+                {detail && <span className="tabular font-mono text-xs text-ink-3 sm:text-right">{p.score.toFixed(2)}</span>}
               </li>
             ))}
           </ul>
@@ -87,7 +92,7 @@ function PendingCard({ p, failed }: { p?: PersonaScore; failed: boolean }) {
   );
 }
 
-function Card({ c, p, facts, i, checking }: { c: Creative; p?: PersonaScore; facts: { id: string; text: string }[]; i: number; checking: boolean }) {
+function Card({ c, p, facts, i, checking, detail }: { c: Creative; p?: PersonaScore; facts: { id: string; text: string }[]; i: number; checking: boolean; detail: boolean }) {
   const who = persona(c.persona_id);
   if (c.error) {
     return (
@@ -102,8 +107,8 @@ function Card({ c, p, facts, i, checking }: { c: Creative; p?: PersonaScore; fac
   return (
     <article className="arrive grid gap-5 py-8 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]" style={{ ['--i' as string]: i }} aria-label={`Creative for ${personaName(c.persona_id)}`}>
       <div>
-        <AdFrame c={c} />
-        {c.revised_from && (
+        <AdFrame c={c} detail={detail} />
+        {detail && c.revised_from && (
           <div className="mt-3 rounded-control border border-dashed border-line px-3 py-2 text-xs">
             <p className="text-ink-3">Before the critic</p>
             <p className="mt-1 text-ink-2 line-through decoration-ink-3/70">
@@ -118,7 +123,7 @@ function Card({ c, p, facts, i, checking }: { c: Creative; p?: PersonaScore; fac
           <h3 className="text-base font-semibold">{personaName(c.persona_id)}</h3>
           {p && (
             <span className="text-xs text-ink-2">
-              {LABEL[p.label]} <span className="tabular font-mono text-ink-3">{p.score.toFixed(2)}</span>
+              {LABEL[p.label]} {detail && <span className="tabular font-mono text-ink-3">{p.score.toFixed(2)}</span>}
             </span>
           )}
         </div>
@@ -126,15 +131,30 @@ function Card({ c, p, facts, i, checking }: { c: Creative; p?: PersonaScore; fac
         {who && <p className="mt-1 text-xs text-ink-3">{who.age_range}, {who.gender_skew}, price sensitivity {who.price_sensitivity}</p>}
 
         <dl className="mt-4 grid grid-cols-1 gap-2.5">
-          <Line label="Angle tested" value={c.angle} />
+          <Line label="Angle" value={c.angle} />
           {p && p.preferences_to_use.length > 0 && <Line label="Speaks to" value={p.preferences_to_use.join(', ')} />}
           {p && p.disinterests_to_avoid.length > 0 && <Line label="Steers clear of" value={p.disinterests_to_avoid.join(', ')} />}
           {p && p.conflicts.length > 0 && <Line label="Conflict" value={p.conflicts.map((x) => `"${x.input_quote}" vs ${x.field.replace(/_/g, ' ')} "${x.persona_value}"`).join('; ')} />}
           {p?.offer_depth && <Line label="Offer depth" value={p.offer_depth} />}
-          <Line label="Facts cited" value={cited.length ? cited.map((f) => `${f.id} "${f.text}"`).join('; ') : 'none'} />
-          {c.publisher_ids.length > 0 && <Line label="Runs on" value={c.publisher_ids.map(pubName).join(', ')} />}
+          {detail && <Line label="Facts cited" value={cited.length ? cited.map((f) => `${f.id} "${f.text}"`).join('; ') : 'none'} />}
+          {c.publisher_ids.length > 0 && <Line label="Runs on" value={p && !p.publisher_match ? `${c.publisher_ids.map(pubName).join(', ')} (${NO_PUBLISHER})` : c.publisher_ids.map(pubName).join(', ')} />}
         </dl>
 
+        {!detail ? (
+          <p className="mt-4 border-t border-line pt-3 text-xs text-ink-3">
+            {!c.critic
+              ? checking
+                ? 'Being reviewed...'
+                : 'Waiting for review.'
+              : c.critic.unverified
+                ? 'Not reviewed in time: treat this copy as a draft.'
+                : failed.length === 0
+                  ? 'Reviewed: grounded in your facts, written for this shopper, within the publisher rules.'
+                  : c.revised_from
+                    ? 'Revised after review.'
+                    : `Review flagged: ${failed.map((k) => k.fix ?? RULE_LABEL[k.criterion] ?? k.criterion).join(' ')}`}
+          </p>
+        ) : (
         <div className="mt-4 border-t border-line pt-3">
           {!c.critic ? (
             <p className="flex items-center gap-2 text-ink-3">
@@ -183,6 +203,7 @@ function Card({ c, p, facts, i, checking }: { c: Creative; p?: PersonaScore; fac
           )}
           {c.grounding_flags.length > 0 && <p className="mt-2 text-xs text-accent">Code check: {c.grounding_flags.join('; ')}</p>}
         </div>
+        )}
       </div>
     </article>
   );
@@ -198,7 +219,7 @@ function Line({ label, value }: { label: string; value: string }) {
 }
 
 /** The ad as the shopper would meet it: under the publisher's order confirmation. */
-function AdFrame({ c }: { c: Creative }) {
+function AdFrame({ c, detail }: { c: Creative; detail: boolean }) {
   const store = c.publisher_ids[0] ? pubName(c.publisher_ids[0]) : null;
   return (
     <figure className="overflow-hidden rounded-panel bg-surface" style={{ boxShadow: 'var(--frame-shadow)' }}>
@@ -218,9 +239,11 @@ function AdFrame({ c }: { c: Creative }) {
           <span className="text-xs text-ink-3">No thanks</span>
         </div>
       </div>
-      <figcaption className="tabular border-t border-line px-4 py-2 font-mono text-[11px] text-ink-3">
-        heading {c.char_counts.heading}/50, subheading {c.char_counts.subheading}/175
-      </figcaption>
+      {detail && (
+        <figcaption className="tabular border-t border-line px-4 py-2 font-mono text-[11px] text-ink-3">
+          heading {c.char_counts.heading}/50, subheading {c.char_counts.subheading}/175
+        </figcaption>
+      )}
     </figure>
   );
 }

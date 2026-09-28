@@ -5,6 +5,14 @@ import { useId, useState } from 'react';
 import { BUDGET_MAX_USD, DURATION_MAX_DAYS, INPUT_MAX_CHARS } from '@/lib/settings';
 import type { ConversionEvent, OfferType } from '@/lib/types';
 import type { RunSettings, SampleChip } from './RunApp';
+import { useDetail } from './ViewMode';
+
+/** A sample's first few words, for the advertiser view's chips (the reviewer view names the trap instead). */
+const short = (text: string) => {
+  const words = text.replace(/^(We sell|We make|We help|A |An )\s*/i, '').split(/\s+/);
+  const cut = words.slice(0, 4).join(' ').replace(/[.,;:]+$/, '');
+  return words.length > 4 ? `${cut}…` : cut;
+};
 
 interface Props {
   input: string;
@@ -23,6 +31,7 @@ interface Props {
 }
 
 export function InputPanel(p: Props) {
+  const detail = useDetail();
   const id = useId();
   const length = p.input.trim().length;
   const tooLong = p.input.length > INPUT_MAX_CHARS;
@@ -83,7 +92,7 @@ export function InputPanel(p: Props) {
 
       <div>
         <h2 className="text-sm font-medium">Or try a sample</h2>
-        <p className="mt-0.5 text-xs text-ink-3">Each one tests a different trap; samples replay from cache instantly.</p>
+        <p className="mt-0.5 text-xs text-ink-3">{detail ? 'Each one tests a different trap; samples replay from cache instantly.' : 'Samples load instantly.'}</p>
         <ul className="mt-2.5 flex flex-wrap gap-1.5">
           {p.samples.map((s) => (
             <li key={s.n}>
@@ -96,7 +105,7 @@ export function InputPanel(p: Props) {
                 className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs transition hover:border-ink-3 active:translate-y-px disabled:opacity-45"
               >
                 <span className="tabular font-mono text-ink-3">{s.n}</span>
-                <span>{s.trap}</span>
+                <span>{detail ? s.trap : short(s.text)}</span>
               </button>
             </li>
           ))}

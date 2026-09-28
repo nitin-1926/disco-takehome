@@ -5,6 +5,7 @@ import type { RunState } from '@/lib/sse-client';
 import { Banner } from './Banners';
 import type { SampleChip } from './RunApp';
 import { usd } from './format';
+import { useDetail } from './ViewMode';
 
 const CLARITY: Record<string, string> = { clear: 'Clear', vague: 'Vague', no_signal: 'No signal' };
 const VIABILITY: Record<string, string> = { strong: 'Strong fit', weak: 'Weak fit', none: 'No fit' };
@@ -31,6 +32,7 @@ export function Skeleton({ lines = 3 }: { lines?: number }) {
 }
 
 export function ProfileCard({ state, onChip, samples, onSample }: { state: RunState; onChip: (text: string) => void; samples: SampleChip[]; onSample: (s: SampleChip) => void }) {
+  const detail = useDetail();
   const p = state.profile;
   if (!p) {
     if (state.status === 'idle') return null;
@@ -42,6 +44,7 @@ export function ProfileCard({ state, onChip, samples, onSample }: { state: RunSt
   }
   const t = state.triage ?? p.triage;
   const buyer = [p.buyer_age ? `ages ${p.buyer_age.low}-${p.buyer_age.high}` : null, p.buyer_gender === 'female' || p.buyer_gender === 'male' ? p.buyer_gender : null].filter(Boolean).join(', ');
+  const buyerLabel = buyer ? `${buyer}${p.buyer_basis === 'assumed' ? ' (assumed)' : ''}` : 'not stated';
 
   return (
     <Section title="Brief" id="brief">
@@ -52,7 +55,7 @@ export function ProfileCard({ state, onChip, samples, onSample }: { state: RunSt
             <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
               <Item label="Category" value={[p.primary_category, ...p.subcategories].map((x) => x.replace(/_/g, ' ')).join(', ')} />
               <Item label="Price" value={p.price ? `${p.price.low === p.price.high ? usd(p.price.low) : `${usd(p.price.low)}-${usd(p.price.high)}`} ${p.price.basis === 'assumed' ? '(assumed)' : ''}` : `${p.price_tier} tier`} mono={!!p.price} />
-              <Item label="Buyer" value={buyer || 'not stated'} />
+              <Item label="Buyer" value={buyerLabel} />
               <Item label="Voice" value={p.tone || 'not stated'} />
             </dl>
           </div>
@@ -63,7 +66,7 @@ export function ProfileCard({ state, onChip, samples, onSample }: { state: RunSt
           <Item label="Catalog fit" value={p.triage.clarity === 'clear' ? VIABILITY[t.viability] : 'not assessed'} strong={p.triage.clarity === 'clear'} />
           <Item label="Policy" value={p.triage.policy_banned ? 'Not allowed' : 'Allowed'} strong={p.triage.policy_banned} attention={p.triage.policy_banned} />
           <p className="col-span-3 text-ink-2">{p.triage.reason}</p>
-          {state.viabilityNote && <p className="col-span-3 text-ink-2">Scores check: {state.viabilityNote}</p>}
+          {detail && state.viabilityNote && <p className="col-span-3 text-ink-2">Scores check: {state.viabilityNote}</p>}
         </dl>
 
         {p.triage.clarity === 'vague' && p.chips.length > 0 && (
@@ -103,11 +106,11 @@ export function ProfileCard({ state, onChip, samples, onSample }: { state: RunSt
         {p.facts.length > 0 && (
           <div>
             <h3 className="text-sm font-medium">Facts an ad may claim</h3>
-            <p className="mt-0.5 text-xs text-ink-3">Copied word for word from the brief. The creatives cite these ids; anything else is flagged.</p>
+            <p className="mt-0.5 text-xs text-ink-3">{detail ? 'Copied word for word from the brief. The creatives cite these ids; anything else is flagged.' : 'Copied word for word from your description. The ads claim nothing beyond these.'}</p>
             <ol className="mt-2 grid grid-cols-1 gap-1.5">
               {p.facts.map((f) => (
                 <li key={f.id} className="flex gap-3 text-sm">
-                  <span className="tabular w-6 shrink-0 font-mono text-xs leading-5 text-ink-3">{f.id}</span>
+                  {detail && <span className="tabular w-6 shrink-0 font-mono text-xs leading-5 text-ink-3">{f.id}</span>}
                   <span className="flex gap-1.5">
                     <Quotes size={12} weight="fill" className="mt-1 shrink-0 text-ink-3" aria-hidden />
                     {f.text}

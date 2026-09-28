@@ -4,6 +4,7 @@ import { Check, CircleDashed, MinusCircle, WarningCircle } from '@phosphor-icons
 import { STAGES, type RunState, type StageState } from '@/lib/sse-client';
 import type { Stage } from '@/lib/types';
 import { secs, STAGE_LABEL, usd } from './format';
+import { useDetail } from './ViewMode';
 
 function Glyph({ s }: { s: StageState['status'] }) {
   if (s === 'done') return <Check size={14} weight="bold" className="text-ink" aria-hidden />;
@@ -15,6 +16,7 @@ function Glyph({ s }: { s: StageState['status'] }) {
 const WORD: Record<StageState['status'], string> = { pending: 'waiting', started: 'working', done: 'done', skipped: 'skipped', error: 'failed' };
 
 export function StageStepper({ state }: { state: RunState }) {
+  const detail = useDetail();
   const idle = state.status === 'idle';
   const done = STAGES.filter((s) => state.stages[s].status === 'done').length;
   const active = STAGES.find((s) => state.stages[s].status === 'started');
@@ -23,7 +25,7 @@ export function StageStepper({ state }: { state: RunState }) {
 
   return (
     <section aria-label="Run progress">
-      <h2 className="text-sm font-medium">Pipeline</h2>
+      <h2 className="text-sm font-medium">{detail ? 'Pipeline' : 'Progress'}</h2>
 
       {/* Phone: one line plus seven segments. */}
       <div className="mt-2 lg:hidden">
@@ -39,11 +41,11 @@ export function StageStepper({ state }: { state: RunState }) {
 
       <ol className="mt-3 hidden lg:block">
         {STAGES.map((s) => (
-          <Row key={s} stage={s} st={state.stages[s]} />
+          <Row key={s} stage={s} st={state.stages[s]} detail={detail} />
         ))}
       </ol>
 
-      {summary && (
+      {summary && detail && (
         <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-line pt-4 text-xs">
           <div>
             <dt className="text-ink-3">Model calls</dt>
@@ -73,14 +75,14 @@ function segment(s: StageState['status']) {
   return 'bg-line';
 }
 
-function Row({ stage, st }: { stage: Stage; st: StageState }) {
+function Row({ stage, st, detail }: { stage: Stage; st: StageState; detail: boolean }) {
   return (
     <li className="relative flex min-h-9 items-center gap-3 overflow-hidden border-b border-line/60 text-sm last:border-b-0" aria-label={`${STAGE_LABEL[stage]}: ${WORD[st.status]}`}>
       <Glyph s={st.status} />
       <span className={st.status === 'pending' || st.status === 'skipped' ? 'text-ink-3' : 'text-ink'}>{STAGE_LABEL[stage]}</span>
       <span className="ml-auto flex items-center gap-2 text-xs text-ink-3">
-        {st.source && st.status === 'done' && <span>{st.source === 'live' ? 'live' : st.source === 'code' ? 'code' : 'cached'}</span>}
-        {st.ms !== undefined && st.status !== 'pending' && <span className="tabular font-mono">{secs(st.ms)}</span>}
+        {detail && st.source && st.status === 'done' && <span>{st.source === 'live' ? 'live' : st.source === 'code' ? 'code' : 'cached'}</span>}
+        {detail && st.ms !== undefined && st.status !== 'pending' && <span className="tabular font-mono">{secs(st.ms)}</span>}
         {st.status === 'skipped' && <span>skipped</span>}
       </span>
       {st.status === 'started' && (

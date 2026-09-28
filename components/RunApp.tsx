@@ -13,6 +13,7 @@ import { InputPanel } from './InputPanel';
 import { ProfileCard } from './ProfileCard';
 import { PublisherList } from './PublisherList';
 import { StageStepper } from './StageStepper';
+import { useViewMode, ViewModeProvider, ViewToggle } from './ViewMode';
 
 export interface SampleChip {
   n: number;
@@ -31,6 +32,7 @@ export function RunApp({ samples }: { samples: SampleChip[] }) {
   // ?live=1: operator mode, cache reads off. Read hydration-safely (false on the server).
   const liveFlag = useSyncExternalStore(noSubscribe, () => new URLSearchParams(window.location.search).get('live') === '1', () => false);
   const [announce, setAnnounce] = useState('');
+  const [view, setView] = useViewMode();
   const ctrl = useRef<AbortController | null>(null);
   const lastInput = useRef(input);
 
@@ -88,15 +90,21 @@ export function RunApp({ samples }: { samples: SampleChip[] }) {
   const streaming = state.status === 'streaming';
 
   return (
+    <ViewModeProvider value={view}>
     <div className="mx-auto grid max-w-[1320px] grid-cols-1 gap-8 px-4 py-6 md:px-8 lg:grid-cols-[380px_minmax(0,1fr)] lg:gap-12 lg:py-10">
       <a href="#plan" className="sr-only rounded-control bg-accent px-3 py-2 text-accent-ink focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-20">
         Skip to the plan
       </a>
       <aside className="lg:sticky lg:top-8 lg:max-h-[calc(100dvh-4rem)] lg:self-start lg:overflow-y-auto lg:pr-2">
         <header className="mb-6">
-          <h1 className="text-base font-semibold tracking-tight">Campaign planner</h1>
+          <div className="flex items-start justify-between gap-3">
+            <h1 className="text-base font-semibold tracking-tight">Campaign planner</h1>
+            <ViewToggle mode={view} onChange={setView} />
+          </div>
           <p className="mt-1 max-w-[42ch] text-sm leading-relaxed text-ink-2">
-            Describe a business in a sentence or two. Get ranked publishers, ads written for real shopper personas, and a campaign config.
+            {view === 'reviewer'
+              ? 'Reviewer view: every score, rule, verdict and number behind the plan, and the config as JSON.'
+              : 'Describe a business in a sentence or two. Get the publishers to run on and why, an ad for each kind of shopper, and a campaign plan.'}
           </p>
         </header>
         <InputPanel
@@ -128,6 +136,7 @@ export function RunApp({ samples }: { samples: SampleChip[] }) {
         </div>
       </main>
     </div>
+    </ViewModeProvider>
   );
 }
 

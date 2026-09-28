@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  CPA_SHARE_BAND, CPA_SHARE_OF_PRICE, CVR_BAND, CVR_PRIOR, ECPM_BAND, SIGNUP_CPA_USD, SUBSCRIPTION_LTV_MULT,
-  cpcAlternative, effectiveCvr, impliedEcpm, priceMid, targetCpa,
+  CPA_SHARE_BAND, CPA_SHARE_OF_PRICE, CVR_BAND, CVR_PRIOR, SIGNUP_CPA_USD, SUBSCRIPTION_LTV_MULT,
+  cpcAlternative, effectiveCvr, priceMid, targetCpa,
 } from '@/lib/pricing';
 import { profiles } from './fixtures/llm-dims';
 
@@ -13,7 +13,6 @@ describe('constants', () => {
     expect(SIGNUP_CPA_USD).toBe(8);
     expect(CVR_PRIOR).toBe(0.01);
     expect(CVR_BAND).toEqual([0.005, 0.02]);
-    expect(ECPM_BAND).toEqual([20, 800]);
   });
 });
 
@@ -43,11 +42,6 @@ describe('effectiveCvr and eCPM', () => {
   test('prior × score × min(1, aov/price)', () => {
     expect(effectiveCvr(0.01, 0.8, 64, 70)).toBeCloseTo(0.01 * 0.8 * (64 / 70));
     expect(effectiveCvr(0.01, 0.8, 128, 70)).toBeCloseTo(0.008);
-  });
-  test('implied eCPM = cpa × cvr × 1000 with band flag', () => {
-    expect(impliedEcpm(31.5, 0.009)).toEqual({ ecpm: 283.5, in_band: true });
-    expect(impliedEcpm(360, 0.00001).in_band).toBe(false);
-    expect(impliedEcpm(360, 0.01).in_band).toBe(false);
   });
 });
 

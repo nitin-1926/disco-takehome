@@ -8,8 +8,8 @@ vi.mock('ai', () => ({
 vi.mock('@ai-sdk/openai', () => ({ createOpenAI: () => Object.assign(() => ({}), { embedding: () => ({}) }) }));
 process.env.OPENAI_API_KEY = 'sk-test';
 
-const { topK, publisherText, personaText } = await import('@/lib/embed');
-const { publishers, personas } = await import('@/lib/data');
+const { topK, publisherText } = await import('@/lib/embed');
+const { publishers } = await import('@/lib/data');
 
 describe('embed helpers', () => {
   test('topK ranks by similarity, breaks ties by id, and respects k', () => {
@@ -19,12 +19,9 @@ describe('embed helpers', () => {
     expect(r[0].similarity).toBe(1);
   });
 
-  test('publisher and persona texts carry the fields retrieval should see', () => {
+  test('publisher text carries the fields retrieval should see', () => {
     const t = publisherText(publishers[0]);
     expect(t).toContain(publishers[0].name);
     expect(t).toContain(publishers[0].notes);
-    const p = personaText(personas[0]);
-    expect(p).toContain(personas[0].name);
-    expect(p).toContain(personas[0].messaging_preferences[0]);
   });
 });

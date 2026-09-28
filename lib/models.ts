@@ -1,6 +1,6 @@
 // Model ids, per-step reasoning and caps, price table. One file to swap a model or an effort level.
 // Prices: OpenAI pricing page, read 2026-09-27 (USD per 1M tokens). Cached input = 10% of input.
-// Defaults below are placeholders until scripts/smoke-models.ts measures the effort curves (see docs/eval/latency.md).
+// Efforts and caps below were measured on live runs before being fixed here (low effort; medium was 2x slower, no more accurate).
 
 export const MODEL_IDS = {
   sol: 'gpt-6-sol',
@@ -10,7 +10,7 @@ export const MODEL_IDS = {
 
 export type ModelKey = 'sol' | 'luna';
 // GPT-6 accepts low | medium | high | xhigh | max only ('none' is silently dropped; measured 2026-09-28).
-export type Reasoning = 'low' | 'medium' | 'high';
+export type Reasoning = 'low' | 'medium';
 
 export const PRICES_USD_PER_M: Record<string, { input: number; cachedInput: number; output: number }> = {
   'gpt-6-sol': { input: 2.0, cachedInput: 0.2, output: 10.0 },

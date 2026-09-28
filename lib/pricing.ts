@@ -16,8 +16,6 @@ export const SIGNUP_CPA_USD = 8;
  */
 export const CVR_PRIOR = 0.01;
 export const CVR_BAND: [number, number] = [0.005, 0.02];
-/** Plausible implied eCPM: $20 (retail media low end) to $800 (Rokt publisher yield per 1k transactions). */
-export const ECPM_BAND: [number, number] = [20, 800];
 /** Fallback price midpoint by tier when the profile has no price at all. Assumption. */
 export const TIER_PRICE_USD: Record<AdvertiserProfile['price_tier'], number> = { budget: 25, mid: 60, premium: 150, luxury: 500 };
 /** CPC = CPA × click-to-purchase rate; 2-5% post-checkout click-to-purchase. Assumption. */
@@ -45,11 +43,6 @@ export function targetCpa(profile: AdvertiserProfile, event: ConversionEvent): {
 /** Prior decayed by fit and by how far the price sits above the publisher's AOV. */
 export function effectiveCvr(prior: number, score: number, aov: number, price: number): number {
   return prior * score * Math.min(1, aov / price);
-}
-
-export function impliedEcpm(cpa: number, cvr: number): { ecpm: number; in_band: boolean } {
-  const ecpm = Math.round(cpa * cvr * 1000 * 100) / 100;
-  return { ecpm, in_band: ecpm >= ECPM_BAND[0] && ecpm <= ECPM_BAND[1] };
 }
 
 /** Suggested when the advertiser competes on price (R2). */

@@ -4,17 +4,13 @@ import { cacheGet, cacheKey, pendingCommitted, redisSet, sha256, type CacheEntry
 import { embeddingIndex, publishers } from './data';
 import { openaiProvider } from './llm';
 import { EMBEDDING_DIMENSIONS, MODEL_IDS, PRICES_USD_PER_M } from './models';
-import type { CallRecord, Persona, Publisher, RunContext } from './types';
+import type { CallRecord, Publisher, RunContext } from './types';
 
 // Stage 2 retrieval. At K = catalog size this is a pass-through; it exists as the scale unit and feeds
-// the trace column and the eval's embedding-scorer baseline. Never on the critical path.
+// the trace column and the eval's embedding-scorer baseline. Off the critical path at K = catalog size.
 
 export function publisherText(p: Publisher): string {
   return `${p.name}. Category: ${p.category}; ${p.subcategories.join(', ')}. Audience: ${p.audience.age_skew}, ${Math.round(p.audience.gender_split.female * 100)}% female, ${p.audience.income_tier} income, ${p.audience.top_geos.join('/')}. AOV $${p.avg_order_value_usd}. ${p.notes}`;
-}
-
-export function personaText(p: Persona): string {
-  return `${p.name}. ${p.description} Affinities: ${p.category_affinities.join(', ')}. Prefers: ${p.messaging_preferences.join(', ')}. Avoids: ${p.disinterested_in.join(', ')}.`;
 }
 
 function embeddingModel() {

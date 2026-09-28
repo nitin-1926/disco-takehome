@@ -47,7 +47,6 @@ export function normalizeSettings(raw: RawSettings = {}): Settings {
     durationDays: duration ? Math.min(Math.round(duration), DURATION_MAX_DAYS) : DEFAULT_SETTINGS.durationDays,
     conversionEvent: event ?? DEFAULT_SETTINGS.conversionEvent,
     offer,
-    userSet: { budget: budget !== null, duration: duration !== null, conversionEvent: event !== null, offer: offer !== null },
   };
 }
 

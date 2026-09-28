@@ -48,7 +48,6 @@ export interface Settings {
   conversionEvent: ConversionEvent;
   offer: Offer | null;
   /** Which fields the user set explicitly (everything else is a default). */
-  userSet: { budget: boolean; duration: boolean; conversionEvent: boolean; offer: boolean };
 }
 
 // ---- Stage 1: profile + triage ----
@@ -268,7 +267,6 @@ export interface CampaignConfig {
 
 export type Stage =
   | 'understand'
-  | 'embed'
   | 'score_publishers'
   | 'score_personas'
   | 'creative'

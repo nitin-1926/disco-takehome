@@ -9,19 +9,10 @@ import type { Persona, Publisher } from './types';
 export const publishers: Publisher[] = publishersJson as Publisher[];
 export const personas: Persona[] = personasJson as Persona[];
 
-export function publisherById(id: string): Publisher | undefined {
-  return publishers.find((p) => p.id === id);
-}
-
-export function personaById(id: string): Persona | undefined {
-  return personas.find((p) => p.id === id);
-}
-
 export interface EmbeddingIndex {
   model: string;
   dimensions: number;
   publishers: Record<string, number[]>;
-  personas: Record<string, number[]>;
 }
 
 export const embeddingIndex: EmbeddingIndex = indexJson as EmbeddingIndex;

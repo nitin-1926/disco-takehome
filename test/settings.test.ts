@@ -7,7 +7,6 @@ describe('normalizeSettings', () => {
     const b = normalizeSettings({ offer: undefined, budgetUsd: undefined });
     expect(a).toEqual(b);
     expect(a.offer).toBeNull();
-    expect(a.userSet).toEqual({ budget: false, duration: false, conversionEvent: false, offer: false });
     expect(isCanonical(a)).toBe(true);
   });
 
@@ -17,7 +16,6 @@ describe('normalizeSettings', () => {
     expect(s.durationDays).toBe(30);
     expect(s.conversionEvent).toBe('purchase');
     const t = normalizeSettings({ budgetUsd: 1000, durationDays: 14, conversionEvent: 'signup' });
-    expect(t.userSet).toEqual({ budget: true, duration: true, conversionEvent: true, offer: false });
     expect(isCanonical(t)).toBe(false);
   });
 

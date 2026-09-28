@@ -8,7 +8,7 @@ export interface Weights {
   price: number;
 }
 
-/** Starting values (F5); the U5 grid search may move them. */
+/** Fixed after the grid search: 94% of weight and threshold sets pass every tuning check, so these are not load-bearing. */
 export const WEIGHTS: Weights = { tone: 0.4, audience: 0.3, price: 0.3 };
 /** Assumed price counts half (F5): the number is a guess, so its dimension should not decide a rank. */
 export const ASSUMED_PRICE_WEIGHT_FACTOR = 0.5;

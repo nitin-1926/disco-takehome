@@ -17,7 +17,6 @@ export const secs = (ms: number) => (ms < 100 ? '<0.1 s' : `${(ms / 1000).toFixe
 
 export const STAGE_LABEL: Record<Stage, string> = {
   understand: 'Read the brief',
-  embed: 'Retrieve',
   score_publishers: 'Score publishers',
   score_personas: 'Judge personas',
   creative: 'Write creatives',

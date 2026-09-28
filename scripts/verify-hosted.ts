@@ -15,6 +15,8 @@ const cancelOnly = process.argv.includes('--cancel');
 
 interface Outcome {
   status: number;
+  /** The stream ended with its `done` event (a cut or crashed stream does not). */
+  done: boolean;
   ms: number;
   firstByteMs: number | null;
   understandMs: number | null;
@@ -33,7 +35,7 @@ async function run(body: Record<string, unknown>, opts: { abortAfter?: 'understa
   const ac = new AbortController();
   const t0 = Date.now();
   const res = await fetch(`${host}/api/run`, { method: 'POST', headers: { 'content-type': 'application/json', origin: host }, body: JSON.stringify(body), signal: ac.signal });
-  const base = { status: res.status, errors: [], calls: 0, liveCalls: 0, costLive: 0, totalMs: null, cold: null, unverified: 0, perCall: '', firstByteMs: null, understandMs: null };
+  const base = { status: res.status, done: false, errors: [], calls: 0, liveCalls: 0, costLive: 0, totalMs: null, cold: null, unverified: 0, perCall: '', firstByteMs: null, understandMs: null };
   if (!(res.headers.get('content-type') ?? '').includes('event-stream')) {
     const j = (await res.json().catch(() => ({}))) as { error?: string };
     return { ...base, ms: Date.now() - t0, error: j.error };
@@ -66,10 +68,12 @@ async function run(body: Record<string, unknown>, opts: { abortAfter?: 'understa
   } catch {
     /* aborted on purpose */
   }
-  const done = events.find((e) => e.type === 'done')?.summary;
+  const summaryEv = events.find((e) => e.type === 'done');
+  const done = summaryEv?.summary;
   const lastCards = [...events].reverse().find((e) => e.payload?.creatives)?.payload?.creatives ?? [];
   return {
     ...base,
+    done: !!summaryEv,
     ms: Date.now() - t0,
     firstByteMs,
     understandMs,
@@ -127,7 +131,7 @@ async function main() {
     L.push(`| ${label} | ${o.status} | ${o.calls} | ${o.liveCalls} | ${s(o.ms)} |`);
   }
   L.push('');
-  check(replays.every((o) => o.status === 200 && o.liveCalls === 0 && o.errors.length === 0), `all ${replays.length} committed inputs replay with zero model calls and no errors`);
+  check(replays.every((o) => o.status === 200 && o.done && o.calls > 0 && o.liveCalls === 0 && o.errors.length === 0), `all ${replays.length} committed inputs replay to done with zero model calls and no errors`);
   check(replays.every((o) => o.ms < 3000), `every replay completes under 3 s (max ${s(Math.max(...replays.map((o) => o.ms)))})`);
 
   // Gates.
@@ -152,7 +156,7 @@ async function main() {
     }
     const done = lives.map((o) => o.ms);
     L.push('', `Live wall: p50 ${s(pct(done, 50))}, p95 ${s(pct(done, 95))}, max ${s(Math.max(...done))}; first byte max ${s(Math.max(...lives.map((o) => o.firstByteMs ?? 0)))}.`, '');
-    check(lives.every((o) => o.status === 200 && o.errors.length === 0 && o.calls > 0), 'five live advertisers complete with no stage errors');
+    check(lives.every((o) => o.status === 200 && o.done && o.errors.length === 0 && o.calls > 0), 'five live advertisers complete with no stage errors');
     check(pct(done, 95) <= 30_000, `live p95 within 30 s (${s(pct(done, 95))})`);
 
     // ?live=1 on a sample: every call live even though the sample is committed.
@@ -162,7 +166,7 @@ async function main() {
 
     // One client, two concurrent live runs: the second is refused while the first holds the lock.
     const [a, b] = await Promise.all([run({ input: 'Waxed canvas tote bags made in Maine, $95.' }), (async () => (await new Promise((r) => setTimeout(r, 1500)), run({ input: 'Loose-leaf oolong tea from a Taiwanese family farm.' })))()]);
-    check(a.status === 200 && b.status === 429 && b.error === 'rate_limited', `same client, concurrent live runs: first streams (${a.status}), second refused (${b.status} ${b.error ?? ''})`);
+    check(a.status === 200 && b.status === 429 && b.error === 'in_progress', `same client, concurrent live runs: first streams (${a.status}), second refused by the lock (${b.status} ${b.error ?? ''})`);
 
     await cancelCheck(L, check);
   }

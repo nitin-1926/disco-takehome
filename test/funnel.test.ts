@@ -11,10 +11,16 @@ const withPrice = (p: AdvertiserProfile, usd: number): AdvertiserProfile => ({ .
 
 describe('constants', () => {
   test('gate and weights match F4/F5', () => {
-    expect(GATE).toEqual({ 0: 0, 1: 0.2, 2: 0.5, 3: 0.8, 4: 1, 5: 1 });
+    expect(GATE).toEqual({ 0: 0, 1: 0.2, 2: 0.5, 3: 0.8, 4: 0.9, 5: 1 });
     expect(WEIGHTS).toEqual({ tone: 0.4, audience: 0.3, price: 0.3 });
     expect(THRESHOLDS.recommended).toBe(0.55);
     expect(THRESHOLDS.weak).toBe(0.35);
+  });
+  test('an exact category outranks an adjacent one when everything else ties', () => {
+    const dims = publisherDims[1].filter((d) => d.publisher_id === 'pub_007');
+    const at = (category_fit: number) => scorePublishers(profiles[1], pubs, dims.map((d) => ({ ...d, category_fit })))[0].score;
+    expect(at(5)).toBeGreaterThan(at(4));
+    expect(at(4)).toBeGreaterThan(at(3));
   });
   test('assumed price halves the price weight and renormalises', () => {
     const w = effectiveWeights(WEIGHTS, 'assumed');

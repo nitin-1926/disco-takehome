@@ -13,7 +13,9 @@ export const WEIGHTS: Weights = { tone: 0.4, audience: 0.3, price: 0.3 };
 /** Assumed price counts half (F5): the number is a guess, so its dimension should not decide a rank. */
 export const ASSUMED_PRICE_WEIGHT_FACTOR = 0.5;
 /** Category gate by LLM category_fit (F4). */
-export const GATE: Record<number, number> = { 0: 0, 1: 0.2, 2: 0.5, 3: 0.8, 4: 1, 5: 1 };
+// An exact category (5) outranks an adjacent one (4) when tone, audience and price tie: with 4 = 5 = 1, the shoe
+// publisher outranked the activewear one for activewear and the kitchen publisher the bedding one for bedding.
+export const GATE: Record<number, number> = { 0: 0, 1: 0.2, 2: 0.5, 3: 0.8, 4: 0.9, 5: 1 };
 export interface Thresholds {
   recommended: number;
   weak: number;

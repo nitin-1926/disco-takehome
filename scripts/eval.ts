@@ -25,7 +25,7 @@ import { resolveViability, scorePublishers, THRESHOLDS, WEIGHTS, type Thresholds
 import { callLLM } from '../lib/llm';
 import { MODEL_IDS, PIPELINE_VERSION, type Reasoning } from '../lib/models';
 import { scorePersonas } from '../lib/personas';
-import { RUN_WALL_MS, runPipeline, type PipelineResult } from '../lib/pipeline';
+import { CALL_TIMEOUT_MS, RUN_WALL_MS, runPipeline, type PipelineResult } from '../lib/pipeline';
 import { finalizeProfile } from '../lib/profile';
 import { normalizeInput, normalizeSettings } from '../lib/settings';
 import type { CallRecord, LlmPublisherDims, RunContext, RunEvent } from '../lib/types';
@@ -44,6 +44,8 @@ const argVal = (f: string) => {
   return i >= 0 ? process.argv[i + 1] : undefined;
 };
 const TODAY = '2026-09-28';
+/** Bake-off and judge calls are offline: not bound by the live 25 s call timeout (medium effort can exceed it). */
+const OFFLINE_TIMEOUT_MS = 120_000;
 const MESSY = [5, 8, 11, 14, 15];
 
 // ---------------------------------------------------------------- context + runner
@@ -414,8 +416,8 @@ async function bakeoff(runs: Run[], exps: Expectation[]): Promise<string> {
     const c = ctx();
     const t0 = Date.now();
     const [u, s] = await Promise.all([
-      callLLM(understandModule, { input: run.input }, c, { modelId: MODEL_IDS.luna }),
-      callLLM(scorePublishersModule, publisherScoringArgs(run.input, catalog.publisherIds), c, { modelId: MODEL_IDS.luna }),
+      callLLM(understandModule, { input: run.input }, c, { modelId: MODEL_IDS.luna, timeoutMs: OFFLINE_TIMEOUT_MS }),
+      callLLM(scorePublishersModule, publisherScoringArgs(run.input, catalog.publisherIds), c, { modelId: MODEL_IDS.luna, timeoutMs: OFFLINE_TIMEOUT_MS }),
     ]);
     lunaMs.push(Date.now() - t0);
     const profile = finalizeProfile(u.output, run.input);
@@ -453,7 +455,12 @@ async function bakeoff(runs: Run[], exps: Expectation[]): Promise<string> {
           },
         ],
       };
-      const [luna, sol] = await Promise.all([callLLM(criticModule, args, ctx()), callLLM(criticModule, args, ctx(), { modelId: MODEL_IDS.sol })]);
+      const pair = await Promise.all([callLLM(criticModule, args, ctx(), { timeoutMs: OFFLINE_TIMEOUT_MS }), callLLM(criticModule, args, ctx(), { modelId: MODEL_IDS.sol, timeoutMs: OFFLINE_TIMEOUT_MS })]).catch((e) => {
+        console.warn(`  critic pair failed on ${run.label} ${card.id}: ${(e as Error).message}`);
+        return null;
+      });
+      if (!pair) continue;
+      const [luna, sol] = pair;
       const lf = new Set(luna.output.verdicts[0]?.failures.map((f) => f.rule) ?? []);
       const sf = new Set(sol.output.verdicts[0]?.failures.map((f) => f.rule) ?? []);
       for (const rule of CRITIC_RULES) {
@@ -470,33 +477,58 @@ async function bakeoff(runs: Run[], exps: Expectation[]): Promise<string> {
   const medScoring: { run: Run; r: ReturnType<typeof rescore> }[] = [];
   const msLow: number[] = [];
   const msMed: number[] = [];
+  let medOverLiveTimeout = 0;
+  let medFailed = 0;
   let personaTopSame = 0;
   let personaPickSame = 0;
+  const personaMsLow: number[] = [];
   const personaMsMed: number[] = [];
+  const fresh = () => evalCtx({ read: false, wallMs: 120_000 });
   for (const run of tuning) {
-    const c = ctx();
-    const t0 = Date.now();
-    const s = await callLLM(scorePublishersModule, publisherScoringArgs(run.input, catalog.publisherIds), c, { reasoning: 'medium' as Reasoning });
-    msMed.push(Date.now() - t0);
-    msLow.push(run.result.summary.calls.find((x) => x.module === 'score-publishers')?.ms ?? 0);
-    const scores = scorePublishers(run.result.profile!, PUBLISHERS, s.output.scores);
-    medScoring.push({ run, r: { ...run.result, publishers: scores, triage: { ...run.result.profile!.triage, viability: resolveViability(run.result.profile!.triage.viability, scores).viability } } });
+    const args = publisherScoringArgs(run.input, catalog.publisherIds);
+    // Both arms timed fresh, so the comparison is like for like (replays carry no timings).
+    let t0 = Date.now();
+    await callLLM(scorePublishersModule, args, fresh(), { timeoutMs: OFFLINE_TIMEOUT_MS });
+    msLow.push(Date.now() - t0);
+    try {
+      t0 = Date.now();
+      const s = await callLLM(scorePublishersModule, args, fresh(), { reasoning: 'medium' as Reasoning, timeoutMs: OFFLINE_TIMEOUT_MS });
+      const took = Date.now() - t0;
+      msMed.push(took);
+      if (took > CALL_TIMEOUT_MS) medOverLiveTimeout++;
+      const scores = scorePublishers(run.result.profile!, PUBLISHERS, s.output.scores);
+      medScoring.push({ run, r: { ...run.result, publishers: scores, triage: { ...run.result.profile!.triage, viability: resolveViability(run.result.profile!.triage.viability, scores).viability } } });
+    } catch (e) {
+      medFailed++;
+      console.warn(`  medium scoring failed on ${run.label}: ${(e as Error).message}`);
+    }
     if (!run.result.personas) continue;
-    const t1 = Date.now();
-    const js = await Promise.all(PERSONAS.map((p) => callLLM(scorePersonaModule, personaScoringArgs(run.input, p, catalog.publisherIds), c, { reasoning: 'medium' as Reasoning }).then((r) => ({ persona_id: p.id, ...r.output }))));
-    personaMsMed.push(Date.now() - t1);
-    const picks = scorePersonas(run.result.profile!, PERSONAS, js, []).filter((x) => x.picked).map((x) => x.persona_id);
-    const lowPicks = run.result.personas.filter((x) => x.picked).map((x) => x.persona_id);
-    if (picks[0] === lowPicks[0]) personaTopSame++;
-    if (picks.slice().sort().join() === lowPicks.slice().sort().join()) personaPickSame++;
+    const judgeAll = async (effort: Reasoning) => {
+      const t = Date.now();
+      const js = await Promise.all(PERSONAS.map((p) => callLLM(scorePersonaModule, personaScoringArgs(run.input, p, catalog.publisherIds), fresh(), { reasoning: effort, timeoutMs: OFFLINE_TIMEOUT_MS }).then((r) => ({ persona_id: p.id, ...r.output }))));
+      return { js, ms: Date.now() - t };
+    };
+    try {
+      const lo = await judgeAll('low');
+      personaMsLow.push(lo.ms);
+      const med = await judgeAll('medium');
+      personaMsMed.push(med.ms);
+      const picks = scorePersonas(run.result.profile!, PERSONAS, med.js, []).filter((x) => x.picked).map((x) => x.persona_id);
+      const lowPicks = scorePersonas(run.result.profile!, PERSONAS, lo.js, []).filter((x) => x.picked).map((x) => x.persona_id);
+      if (picks[0] === lowPicks[0]) personaTopSame++;
+      if (picks.slice().sort().join() === lowPicks.slice().sort().join()) personaPickSame++;
+    } catch (e) {
+      console.warn(`  persona effort arm failed on ${run.label}: ${(e as Error).message}`);
+    }
   }
   const personaRuns = tuning.filter((x) => x.result.personas).length;
   L.push('## Reasoning effort: low (live) vs medium', '', '| step | low | medium |', '|---|---|---|');
-  L.push(`| scoring: publisher checks | ${rubric} | ${pubPass(medScoring)} |`);
-  L.push(`| scoring: wall p50 | ${pct(msLow, 50)} ms | ${pct(msMed, 50)} ms |`);
-  L.push(`| personas: same top persona as low | n/a | ${personaTopSame}/${personaRuns} |`);
-  L.push(`| personas: same picked set as low | n/a | ${personaPickSame}/${personaRuns} |`);
-  L.push(`| personas: ten parallel calls, wall p50 | see eval/output.md | ${pct(personaMsMed, 50)} ms |`, '');
+  L.push(`| scoring: publisher checks | ${rubric} | ${pubPass(medScoring)} (${medFailed} failed) |`);
+  L.push(`| scoring: wall p50 / max | ${pct(msLow, 50)} / ${Math.max(0, ...msLow)} ms | ${pct(msMed, 50)} / ${Math.max(0, ...msMed)} ms |`);
+  L.push(`| scoring: over the live 25 s call timeout | ${msLow.filter((x) => x > CALL_TIMEOUT_MS).length}/${msLow.length} | ${medOverLiveTimeout}/${msMed.length} |`);
+  L.push(`| personas: same top persona, low vs medium | ${personaTopSame}/${personaRuns} | |`);
+  L.push(`| personas: same picked set, low vs medium | ${personaPickSame}/${personaRuns} | |`);
+  L.push(`| personas: ten parallel calls, wall p50 | ${pct(personaMsLow, 50)} ms | ${pct(personaMsMed, 50)} ms |`, '');
 
   // (e) Creatives: low vs medium first drafts, judged.
   const judged = { low: new Map<string, number>(), medium: new Map<string, number>() };
@@ -507,11 +539,14 @@ async function bakeoff(runs: Run[], exps: Expectation[]): Promise<string> {
       const p = run.result.personas.find((x) => x.persona_id === card.persona_id)!;
       const persona = PERSONAS.find((x) => x.id === card.persona_id)!;
       const args = creativeArgs(run.result.profile!, { ...p, name: persona.name, description: persona.description }, null);
-      const med = await callLLM(creativeModule, args, ctx(), { reasoning: 'medium' as Reasoning });
+      const med = await callLLM(creativeModule, args, ctx(), { reasoning: 'medium' as Reasoning, timeoutMs: OFFLINE_TIMEOUT_MS }).catch(() => null);
+      if (!med) continue;
       const low = { heading: card.revised_from?.heading ?? card.heading, subheading: card.revised_from?.subheading ?? card.subheading, cta: card.cta };
       const judge = (h: string, s: string, cta: string) =>
-        callLLM(judgeModule, { facts: run.result.profile!.facts.map((f) => f.text), offer: null, persona: { name: persona.name, preferences: p.preferences_to_use, disinterests: p.disinterests_to_avoid }, heading: h, subheading: s, cta }, ctx());
-      const [jl, jm] = await Promise.all([judge(low.heading, low.subheading, low.cta), judge(med.output.heading, med.output.subheading, med.output.cta)]);
+        callLLM(judgeModule, { facts: run.result.profile!.facts.map((f) => f.text), offer: null, persona: { name: persona.name, preferences: p.preferences_to_use, disinterests: p.disinterests_to_avoid }, heading: h, subheading: s, cta }, ctx(), { timeoutMs: OFFLINE_TIMEOUT_MS });
+      const judged2 = await Promise.all([judge(low.heading, low.subheading, low.cta), judge(med.output.heading, med.output.subheading, med.output.cta)]).catch(() => null);
+      if (!judged2) continue;
+      const [jl, jm] = judged2;
       drafts++;
       for (const v of jl.output.verdicts) if (v.pass) judged.low.set(v.criterion, (judged.low.get(v.criterion) ?? 0) + 1);
       for (const v of jm.output.verdicts) if (v.pass) judged.medium.set(v.criterion, (judged.medium.get(v.criterion) ?? 0) + 1);
@@ -527,7 +562,8 @@ async function bakeoff(runs: Run[], exps: Expectation[]): Promise<string> {
   let dTone = 0;
   let n = 0;
   for (const run of tuning) {
-    const r = await callLLM(reversed, publisherScoringArgs(run.input, catalog.publisherIds), ctx());
+    const r = await callLLM(reversed, publisherScoringArgs(run.input, catalog.publisherIds), ctx(), { timeoutMs: OFFLINE_TIMEOUT_MS }).catch(() => null);
+    if (!r) continue;
     for (const s of r.output.scores) {
       const f = run.result.publishers!.find((x) => x.publisher_id === s.publisher_id);
       if (!f) continue;
@@ -551,6 +587,7 @@ async function judge(runs: Run[]): Promise<void> {
         judgeModule,
         { facts: run.result.profile!.facts.map((f) => f.text), offer: null, persona: { name: personaName(card.persona_id), preferences: p.preferences_to_use, disinterests: p.disinterests_to_avoid }, heading: card.heading, subheading: card.subheading, cta: card.cta },
         evalCtx({ read: true, wallMs: 120_000 }),
+        { timeoutMs: OFFLINE_TIMEOUT_MS },
       );
       rows.push({ key: `${run.label}-${card.id}`, sample: run.label, persona: personaName(card.persona_id), heading: card.heading, subheading: card.subheading, verdicts: Object.fromEntries(r.output.verdicts.map((v) => [v.criterion, { pass: v.pass, critique: v.critique }])) });
     }

@@ -227,6 +227,8 @@ export interface CampaignConfig {
   budget: { total_usd: number; daily_cap_usd: number; explore_share: number; planning_estimate: true; viability_factor: number };
   bidding: {
     model: 'cpa_cpo' | 'cpc';
+    /** Starting bid range: the same price basis at the benchmark's low and high CPA share. */
+    cpa_range_usd: [number, number];
     fixed_cpa_usd: number;
     fixed_cpo_usd: number;
     cpc_alternative: { min_usd: number; max_usd: number; optimization_target: 'roas' | 'cpa' } | null;

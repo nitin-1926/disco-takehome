@@ -1,4 +1,4 @@
-// Campaign config assembly (F6/F8/F16/F21/F22). Pure and browser-safe: no env, data, model or Date.now() reads; `meta` and `today` are passed in.
+// Campaign config assembly. Pure and browser-safe: no env, data, model or Date.now() reads; `meta` and `today` are passed in.
 import { money } from './fit';
 import { CPA_SHARE_BAND, CPA_SHARE_OF_PRICE, CVR_BAND, CVR_PRIOR, SIGNUP_CPA_USD, SUBSCRIPTION_LTV_MULT, cpcAlternative, effectiveCvr, priceMid, targetCpa } from './pricing';
 import type { AdvertiserProfile, CampaignConfig, Creative, PersonaScore, Placement, Publisher, PublisherScore, Settings, Triage, Viability } from './types';
@@ -31,12 +31,14 @@ export interface BuildConfigInput {
 
 const DAY_MS = 86_400_000;
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
 const parseDay = (s: string) => Date.UTC(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)));
 const formatDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const addDays = (day: string, n: number) => formatDay(parseDay(day) + n * DAY_MS);
 
 interface Candidate {
   score: PublisherScore;
+  pool: 'exploit' | 'explore';
   pub: Publisher;
   share: number;
   cap: number;
@@ -58,16 +60,21 @@ function rawShares(exploit: PublisherScore[], explore: PublisherScore[]): Map<st
   return shares;
 }
 
-/** Drop placements under 5% and renormalise, only while at least two would remain. */
-function dropSmall(items: Candidate[]): Candidate[] {
+/** Drop placements under 5% while at least two would remain. The freed share stays in its own pool (85/15 holds);
+ * only an emptied pool hands its share to the other. Returns the survivors and the dropped. */
+function dropSmall(items: Candidate[]): { kept: Candidate[]; dropped: Candidate[] } {
   let list = items;
+  const dropped: Candidate[] = [];
   for (;;) {
-    if (list.length < 3) return list;
+    if (list.length < 3) return { kept: list, dropped };
     const min = list.reduce((m, c) => (c.share < m.share ? c : m));
-    if (min.share >= MIN_PLACEMENT_SHARE) return list;
+    if (min.share >= MIN_PLACEMENT_SHARE) return { kept: list, dropped };
+    dropped.push(min);
     list = list.filter((c) => c !== min);
-    const total = list.reduce((n, c) => n + c.share, 0);
-    for (const c of list) c.share /= total;
+    const pool = list.filter((c) => c.pool === min.pool);
+    const target = pool.length ? pool : list;
+    const have = target.reduce((n, c) => n + c.share, 0);
+    for (const c of target) c.share *= (have + min.share) / have;
   }
 }
 
@@ -86,7 +93,7 @@ function applyCaps(items: Candidate[], total: number): number {
     const excess = total - items.reduce((n, c) => n + c.allocation, 0);
     if (!free.length) break;
     const freeShare = free.reduce((n, c) => n + c.share, 0);
-    for (const c of free) c.allocation = c.share * total + (excess * c.share) / freeShare - (c.allocation - c.share * total);
+    for (const c of free) c.allocation += (excess * c.share) / freeShare;
   }
   return items.reduce((n, c) => n + c.allocation, 0);
 }
@@ -124,15 +131,18 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
   const exploit = recommended.length ? recommended : weak.slice(0, WEAK_TEST_POOL);
   const explore = recommended.length ? weak : [];
   let items: Candidate[] = [];
+  let dropped: Candidate[] = [];
   if (total > 0 && exploit.length) {
     const shares = rawShares(exploit, explore);
+    const exploreIds = new Set(explore.map((s) => s.publisher_id));
     items = [...exploit, ...explore].map((score) => {
       const pub = pubById.get(score.publisher_id)!;
       const impressions = (pub.monthly_impressions * days) / 30;
       const cvr = [CVR_BAND[0], CVR_PRIOR, CVR_BAND[1]].map((prior) => effectiveCvr(prior, score.score, pub.avg_order_value_usd, price.value)) as Candidate['cvr'];
-      return { score, pub, share: shares.get(score.publisher_id)!, cap: impressions * cvr[1] * cpa, impressions, cvr, allocation: 0 };
+      const pool = exploreIds.has(score.publisher_id) ? ('explore' as const) : ('exploit' as const);
+      return { score, pool, pub, share: shares.get(score.publisher_id)!, cap: impressions * cvr[1] * cpa, impressions, cvr, allocation: 0 };
     });
-    items = dropSmall(items);
+    ({ kept: items, dropped } = dropSmall(items));
     const spendable = applyCaps(items, total);
     if (spendable < total - 0.005) {
       warnings.push(`Inventory caps limit spend to ${money(spendable)} of ${money(total)} over ${days} days; extend the flight or add publishers.`);
@@ -191,14 +201,14 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
   assumptions.push(
     { field: 'bidding.fixed_cpa_usd', value: money(cpa), why: basis, source: `TGM DTC benchmark: CPA ${CPA_SHARE_BAND.map((b) => `${b * 100}%`).join('-')} of first-order AOV (using ${CPA_SHARE_OF_PRICE * 100}%)` },
     { field: 'cvr_prior', value: `${CVR_PRIOR * 100}% (band ${CVR_BAND[0] * 100}-${CVR_BAND[1] * 100}%)`, why: 'post-checkout conversions per impression, decayed by fit and AOV/price', source: 'derived from Rokt publisher yield $0.30-0.80 per transaction, capped by 5.6% engagement' },
-    { field: 'budget.viability_factor', value: String(factor), why: `viability ${triage.viability}: ${triage.reason}`, source: 'assumption (decisions F6)' },
-    { field: 'budget.explore_share', value: `${EXPLORE_SHARE * 100}%`, why: 'explore budget buys publisher × persona outcome data that replaces the model prior', source: 'allocation thesis (decisions #13)' },
+    { field: 'budget.viability_factor', value: String(factor), why: `viability ${triage.viability}: ${triage.reason}`, source: 'assumption' },
+    { field: 'budget.explore_share', value: `${EXPLORE_SHARE * 100}% target`, why: 'explore budget buys publisher × persona outcome data that replaces the model prior', source: 'allocation thesis' },
   );
   if (profile.is_subscription || settings.conversionEvent === 'subscription') {
-    assumptions.push({ field: 'subscription_ltv_mult', value: `${SUBSCRIPTION_LTV_MULT}x`, why: 'recurring revenue justifies a higher first-order CPA', source: 'assumption (decisions F7)' });
+    assumptions.push({ field: 'subscription_ltv_mult', value: `${SUBSCRIPTION_LTV_MULT}x`, why: 'recurring revenue justifies a higher first-order CPA', source: 'assumption' });
   }
   if (settings.conversionEvent === 'signup') {
-    assumptions.push({ field: 'signup_cpa_usd', value: money(SIGNUP_CPA_USD), why: 'flat lead-gen CPA for a signup', source: 'assumption (decisions R7)' });
+    assumptions.push({ field: 'signup_cpa_usd', value: money(SIGNUP_CPA_USD), why: 'flat lead-gen CPA for a signup', source: 'assumption' });
   }
   if (price.basis === 'tier_default') {
     assumptions.push({ field: 'price', value: money(price.value), why: `no price stated; ${profile.price_tier}-tier default used for CPA and ROAS`, source: 'assumption (pricing.ts TIER_PRICE_USD)' });
@@ -211,6 +221,10 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
   const picked = personaScores.filter((p) => p.picked);
   const groupReason: Record<string, keyof PublisherScore['reasons']> = { 'not their category': 'category', 'audience mismatch': 'audience', 'price mismatch': 'price', 'tone mismatch': 'tone' };
   const placed = new Set(placements.map((p) => p.publisher_id));
+  const droppedIds = new Set(dropped.map((c) => c.pub.id));
+  const pooled = new Set([...exploit, ...explore].map((s) => s.publisher_id));
+  const unplacedReason = (s: PublisherScore) =>
+    droppedIds.has(s.publisher_id) ? 'below 5% share' : !pooled.has(s.publisher_id) && s.band === 'weak' ? `outside the ${WEAK_TEST_POOL} best weak fits` : 'no budget';
 
   return {
     meta,
@@ -221,11 +235,12 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
     budget: {
       total_usd: total,
       daily_cap_usd: total > 0 ? round2(total / days) : 0,
-      explore_share: total > 0 && explore.length ? EXPLORE_SHARE : 0,
+      // Realised, not the target: inventory caps can move money between the pools.
+      explore_share: total > 0 ? round3(items.filter((c) => c.pool === 'explore').reduce((n, c) => n + c.allocation, 0) / total) : 0,
       planning_estimate: true,
       viability_factor: factor,
     },
-    bidding: { model: 'cpa_cpo', fixed_cpa_usd: cpa, fixed_cpo_usd: 0, cpc_alternative: cpc, basis },
+    bidding: { model: 'cpa_cpo', fixed_cpa_usd: cpa, cpa_range_usd: CPA_SHARE_BAND.map((b) => round2((cpa * b) / CPA_SHARE_OF_PRICE)) as [number, number], fixed_cpo_usd: 0, cpc_alternative: cpc, basis },
     targeting: {
       customer_type: 'new_only',
       primary_category: profile.primary_category,
@@ -244,7 +259,7 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
         .filter((s) => s.band === 'excluded' || (!placed.has(s.publisher_id) && total > 0))
         .map((s) => ({
           id: s.publisher_id,
-          reason_group: s.exclusion_group ?? (s.band === 'weak' ? 'below 5% share' : 'no budget'),
+          reason_group: s.exclusion_group ?? unplacedReason(s),
           reason: s.exclusion_group ? s.reasons[groupReason[s.exclusion_group]] : `score ${Math.round(s.score * 100)}/100 (${s.band})`,
         })),
       personas: personaScores

@@ -153,6 +153,29 @@ describe('viability and budgets', () => {
     expect(c.placements.reduce((n, p) => n + p.share, 0)).toBeCloseTo(1, 6);
     expect(heart.conversions_range[0]).toBeLessThan(heart.conversions_range[1]);
   });
+  test('caps binding over several rounds never strand budget: a cap warning only when every placement is full', () => {
+    const samples: SampleId[] = [1, 4, 9, 13, 14];
+    for (const sample of samples) {
+      for (const budgetUsd of [50_000, 250_000, 500_000, 3_000_000]) {
+        for (const durationDays of [7, 30]) {
+          const c = build(sample, normalizeSettings({ budgetUsd, durationDays }));
+          const capped = c.warnings.some((w) => w.startsWith('Inventory caps'));
+          for (const p of c.placements) expect(p.allocation_usd).toBeGreaterThanOrEqual(0);
+          if (capped) for (const p of c.placements) expect(p.inventory_used_pct).toBeGreaterThanOrEqual(99.9);
+          else expect(c.budget.total_usd).toBe(budgetUsd * c.budget.viability_factor);
+          expect(sum(c)).toBe(c.budget.total_usd);
+        }
+      }
+    }
+  });
+  test('the 5% floor keeps each pool at its share: explore stays 15% when no cap binds', () => {
+    for (const sample of [1, 4, 9, 13, 14] as SampleId[]) {
+      const c = build(sample);
+      if (c.warnings.some((w) => w.startsWith('Inventory caps'))) continue;
+      const weak = c.placements.filter((p) => p.band === 'weak').reduce((n, p) => n + p.allocation_usd, 0);
+      expect(c.budget.explore_share).toBe(weak > 0 ? 0.15 : 0);
+    }
+  });
   test('shares under 5% are dropped and redistributed only while ≥ 2 placements remain', () => {
     const c = build(4);
     expect(c.placements.length).toBeGreaterThanOrEqual(2);
@@ -164,6 +187,20 @@ describe('viability and budgets', () => {
     expect(c.placements.length).toBeGreaterThanOrEqual(1);
     expect(c.budget.explore_share).toBe(0);
     expect(sum(c)).toBe(c.budget.total_usd);
+  });
+  test('unplaced publishers say why: outside the weak test pool, never "no budget" or "below 5%" by default', () => {
+    const profile = profiles[6];
+    // Six weak fits and no recommended one: three get the test budget, three are outside the pool.
+    const publisherScores = scorePublishers(profile, pubs, publisherDims[6]).map((s, i) => (i < 6 ? { ...s, band: 'weak' as const, exclusion_group: null, score: 0.5 - i * 0.01 } : s));
+    const c = buildConfig({ profile, triage: profile.triage, settings: normalizeSettings(), publisherScores, personaScores: [], creatives: [], publishers: pubs, meta, today: '2026-09-28' });
+    expect(c.placements).toHaveLength(3);
+    expect(c.exclusions.publishers.filter((e) => e.reason_group === 'outside the 3 best weak fits')).toHaveLength(3);
+  });
+  test('a starting bid range brackets the fixed CPA', () => {
+    const c = build(1);
+    const [lo, hi] = c.bidding.cpa_range_usd;
+    expect(lo).toBeLessThan(c.bidding.fixed_cpa_usd);
+    expect(hi).toBeGreaterThan(c.bidding.fixed_cpa_usd);
   });
   test('#13 price-led advertiser gets a CPC alternative and its assumption', () => {
     const c = build(13);

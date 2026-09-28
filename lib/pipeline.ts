@@ -4,10 +4,10 @@ import { personas as PERSONAS, publishers as PUBLISHERS } from './data';
 import { retrieveCached, type Retrieved } from './embed';
 import { env } from './env';
 import { groupExclusions, resolveViability, scorePublishers, WEIGHTS, type Weights } from './funnel';
-import { groundCreative } from './grounding';
+import { checkLimits, groundCreative } from './grounding';
 import { callLLM, LlmError, type CallOptions, type CallResult, type PromptModule } from './llm';
 import { CREATIVES_MAX, MODEL_IDS, PIPELINE_VERSION } from './models';
-import { scorePersonas, type PersonaPickOpts } from './personas';
+import { scorePersonas } from './personas';
 import { containsSpan, finalizeProfile, runMode, type RunMode } from './profile';
 import { normalizeInput } from './settings';
 import type {
@@ -50,7 +50,8 @@ const RETRIEVAL_WAIT_MS = 4_000;
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   cache_miss: 'This sample’s cached result is stale. Run it live to refresh.',
-  spend_refused: 'The demo’s spend cap is reached, so live runs are paused. Cached samples still work.',
+  spend_refused: 'The demo’s live-run budget is used up for now. Cached samples still work.',
+  store_error: 'The spend tracker could not be reached, so this step did not run. Try again shortly.',
   schema_invalid: 'The model returned an unusable answer twice.',
   timeout: 'The model took too long to answer.',
   aborted: 'Run cancelled.',
@@ -61,9 +62,6 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
 
 export interface PipelineOptions {
   weights?: Weights;
-  personaOpts?: PersonaPickOpts;
-  /** Live latency fallback rung may lower this to 3. */
-  creativesMax?: number;
   /** YYYY-MM-DD; eval pins it so the committed output is stable. */
   today?: string;
   cold?: boolean;
@@ -108,11 +106,12 @@ const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
 export async function runPipeline(rawInput: string, settings: Settings, ctx: RunContext, opts: PipelineOptions = {}): Promise<PipelineResult> {
   const input = normalizeInput(rawInput);
   const weights = opts.weights ?? WEIGHTS;
-  const creativesMax = opts.creativesMax ?? CREATIVES_MAX;
   const calls: CallRecord[] = [];
   const errors: RunSummary['errors'] = [];
   const skipped: Stage[] = [];
   let aborted = false;
+  // Late side calls (released in stop mode) settle their spend but never change a summary already sent.
+  let finished = false;
 
   const result: PipelineResult = {
     input,
@@ -163,7 +162,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
   };
   const call = async <A, O>(mod: PromptModule<A, O>, args: A, o: CallOptions<O> = {}): Promise<CallResult<O>> => {
     const r = await callLLM(mod, args, ctx, o);
-    calls.push(r.record);
+    if (!finished) calls.push(r.record);
     return r;
   };
   const optionalTimeout = () => Math.min(CALL_TIMEOUT_MS, ctx.wallAt - Date.now());
@@ -181,6 +180,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
   };
 
   const finish = (): PipelineResult => {
+    finished = true;
     const live = calls.filter((c) => c.source === 'live');
     result.summary = {
       run_id: ctx.run_id,
@@ -199,7 +199,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
   // ---- Stage 1: understand, with retrieval beside it (off the critical path) ----
   const retrieval: Promise<Retrieved[] | null> = retrieveCached(input, env().retrieveK, ctx)
     .then((r) => {
-      if (r.record) calls.push(r.record);
+      if (r.record && !finished) calls.push(r.record);
       return r.candidates;
     })
     .catch((e) => {
@@ -216,14 +216,11 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
     env().retrieveK >= allIds.length
       ? Promise.resolve(allIds)
       : withTimeout(retrieval, RETRIEVAL_WAIT_MS, null).then((c) => c?.map((x) => x.id).filter((id) => allIds.includes(id)) ?? allIds);
-  const scoringAbort = new AbortController();
-  const personasAbort = new AbortController();
   const t = started('understand');
   const understandP = call(understandModule, { input });
   const tScoring = started('score_publishers');
   const scoringP = candidatesP.then((ids) =>
     call(scorePublishersModule, publisherScoringArgs(input, ids), {
-      signal: scoringAbort.signal,
       validate: (o) => checkIds(o.scores.map((s) => s.publisher_id), ids, 'publisher'),
     }).then((r) => ({ r, ids })),
   );
@@ -232,20 +229,20 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
   const personasP = candidatesP.then((ids) =>
     Promise.all(
       PERSONAS.map((persona) =>
-        call(scorePersonaModule, personaScoringArgs(input, persona, ids), { signal: personasAbort.signal }).then(
+        call(scorePersonaModule, personaScoringArgs(input, persona, ids)).then(
           (r) => ({ persona, r, e: null as unknown }),
           (e: unknown) => ({ persona, r: null, e }),
         ),
       ),
     ),
   );
-  // Side branches may be abandoned (stop mode); never leave their rejection unhandled.
+  // Side branches may be released (stop mode); never leave their rejection unhandled.
   scoringP.catch(() => {});
   personasP.catch(() => {});
-  const abandon = () => {
-    scoringAbort.abort();
-    personasAbort.abort();
-  };
+  // A released call is not aborted: it finishes after the response and settles at its real cost. Aborting it would
+  // keep its whole worst-case reservation on the counter (the provider may bill an aborted call), so every vague
+  // input would eat ~$0.35 of the cap for a few cents of work. A client cancel (ctx.signal) still aborts everything.
+  const release = (...branches: Promise<unknown>[]) => ctx.defer(async () => void (await Promise.allSettled(branches)));
 
   let profile: AdvertiserProfile;
   try {
@@ -255,22 +252,22 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
     Object.assign(result, { profile, mode: gate.mode, modeWhy: gate.why, triage: profile.triage });
     emit({ type: 'stage', stage: 'understand', status: 'done', source: u.source, ms: Date.now() - t, payload: { profile, mode: gate.mode, why: gate.why } });
   } catch (e) {
-    abandon();
+    release(scoringP, personasP);
     fail('understand', e);
+    for (const s of ['score_publishers', 'score_personas', 'creative', 'critic', 'revise', 'config'] as Stage[]) skip(s, ERROR_MESSAGES.dependency_failed);
     await withTimeout(retrieval, RETRIEVAL_WAIT_MS, null);
     return finish();
   }
   const mode = result.mode!;
 
   if (mode === 'stop') {
-    abandon();
+    release(scoringP, personasP);
     for (const s of ['score_publishers', 'score_personas', 'creative', 'critic', 'revise'] as Stage[]) skip(s, result.modeWhy);
     if (profile.triage.policy_banned) {
       // Banned: a $0 config states the decision; nothing is scored.
       const triage: Triage = { ...profile.triage, viability: 'none' };
       result.triage = triage;
-      buildAndEmitConfig(triage, [], [], []);
-      result.config?.warnings.unshift(`Policy: ${result.modeWhy}`);
+      buildAndEmitConfig(triage, [], [], [], [`Policy: ${result.modeWhy}`]);
     } else {
       skip('config', result.modeWhy);
     }
@@ -318,7 +315,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
       if (firstError) fail('score_personas', firstError);
       result.judgments = ok.map(({ persona, r }) => toJudgment(persona, r!.output, input));
       // The pick never depends on publisher weights; the publisher mapping is attached once scoring lands.
-      result.personas = scorePersonas(profile, PERSONAS, result.judgments, [], { ...opts.personaOpts, max: creativesMax });
+      result.personas = scorePersonas(profile, PERSONAS, result.judgments, [], { max: CREATIVES_MAX });
       const sources = ok.map((x) => x.r!.source);
       emit({ type: 'stage', stage: 'score_personas', status: 'done', source: sources.includes('live') ? 'live' : sources[0], ms: Date.now() - tPersonas, payload: { personas: result.personas } });
     } catch (e) {
@@ -339,7 +336,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
         const persona = PERSONAS.find((x) => x.id === p.persona_id)!;
         const card = result.creatives[i];
         try {
-          const r = await call(creativeModule, creativeArgs(profile, { ...p, name: persona.name, description: persona.description }, settings.offer));
+          const r = await call(creativeModule, creativeArgs(profile, { ...p, name: persona.name, description: persona.description }, settings.offer), { validate: limitsProblem });
           sources.push(r.source);
           Object.assign(card, toCreative(card.id, p.persona_id, r.output));
         } catch (e) {
@@ -384,7 +381,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
     if (scoring && result.triage?.viability !== 'none') {
       await personasBranch();
     } else {
-      personasAbort.abort();
+      release(personasP);
       for (const s of ['score_personas', 'creative', 'critic', 'revise'] as Stage[]) skip(s, scoring ? result.modeWhy : ERROR_MESSAGES.dependency_failed);
     }
   }
@@ -392,7 +389,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
   // Map personas and creatives to the placement-eligible publishers (recommended, else weak) once both branches landed.
   const eligible = result.publishers ? eligibleIds(result.publishers) : [];
   if (result.judgments && result.personas) {
-    result.personas = scorePersonas(profile, PERSONAS, result.judgments, eligible, { ...opts.personaOpts, max: creativesMax });
+    result.personas = scorePersonas(profile, PERSONAS, result.judgments, eligible, { max: CREATIVES_MAX });
     const byPersona = new Map(result.personas.map((p) => [p.persona_id, p]));
     for (const c of result.creatives) c.publisher_ids = byPersona.get(c.persona_id)?.publisher_ids ?? [];
   }
@@ -451,7 +448,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
       const r = await call(
         reviseModule,
         creativeArgs(profile, { ...pscore, name: persona.name, description: persona.description }, settings.offer, { heading: card.heading, subheading: card.subheading, failures }),
-        { timeoutMs: optionalTimeout() },
+        { timeoutMs: optionalTimeout(), validate: limitsProblem },
       );
       checks.reviseSources.push(r.source);
       const next = toCreative(card.id, card.persona_id, r.output);
@@ -522,7 +519,7 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
     for (const c of cards) c.critic = { pass: false, checks: [], unverified: true };
   }
 
-  function buildAndEmitConfig(triage: Triage, pubScores: PublisherScore[], personaScores: PersonaScore[], creatives: Creative[]) {
+  function buildAndEmitConfig(triage: Triage, pubScores: PublisherScore[], personaScores: PersonaScore[], creatives: Creative[], leadWarnings: string[] = []) {
     const t0 = started('config');
     result.config = buildConfig({
       profile,
@@ -540,8 +537,15 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
       },
       today: opts.today ?? new Date().toISOString().slice(0, 10),
     });
+    // Before the event is serialised: a warning added afterwards would never reach the page or the download.
+    result.config.warnings.unshift(...leadWarnings);
     emit({ type: 'stage', stage: 'config', status: 'done', source: 'code', ms: Date.now() - t0, payload: { config: result.config } });
   }
+}
+
+/** Disco's character limits as a code check, so an over-long heading gets one retry instead of shipping. */
+function limitsProblem(o: CreativeOutput): string | null {
+  return checkLimits(o).join('; ') || null;
 }
 
 /** Model output → judgment: ids set by code, copied lists kept only where they really are the persona's own words. */

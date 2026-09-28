@@ -227,9 +227,9 @@ export interface CampaignConfig {
   budget: { total_usd: number; daily_cap_usd: number; explore_share: number; planning_estimate: true; viability_factor: number };
   bidding: {
     model: 'cpa_cpo' | 'cpc';
+    fixed_cpa_usd: number;
     /** Starting bid range: the same price basis at the benchmark's low and high CPA share. */
     cpa_range_usd: [number, number];
-    fixed_cpa_usd: number;
     fixed_cpo_usd: number;
     cpc_alternative: { min_usd: number; max_usd: number; optimization_target: 'roas' | 'cpa' } | null;
     basis: string;
@@ -279,9 +279,13 @@ export type Stage =
 export type StageStatus = 'started' | 'done' | 'skipped';
 export type Source = 'committed' | 'redis' | 'live' | 'code';
 
+/** Refusals the route returns as JSON before any stream byte. */
+export type GateError = 'bad_request' | 'forbidden' | 'unsupported_media_type' | 'too_large' | 'key_missing' | 'store_unavailable' | 'rate_limited' | 'in_progress' | 'spend_cap' | 'daily_cap';
+
 export type ErrorCode =
   | 'cache_miss'
   | 'spend_refused'
+  | 'store_error'
   | 'schema_invalid'
   | 'timeout'
   | 'aborted'
@@ -345,7 +349,7 @@ export interface CacheMode {
 export type ReserveResult = { ok: true; id: string } | { ok: false; reason: 'cap' | 'store' };
 
 export interface SpendHook {
-  reserve(estimateUsd: number, label: string): Promise<ReserveResult>;
+  reserve(estimateUsd: number): Promise<ReserveResult>;
   settle(id: string, actualUsd: number): Promise<void>;
 }
 
@@ -358,7 +362,6 @@ export interface RunContext {
   startedAt: number;
   cacheMode: CacheMode;
   spend: SpendHook | null;
-  /** Deferred work (settle, cache writes, ledger). Route backs it with after(); CLI/eval collect and await. */
+  /** Deferred work (settles, cache writes, released side calls). Route backs it with after(); CLI/eval collect and await. */
   defer: (task: () => Promise<void>) => void;
-  source: 'vercel' | 'local';
 }

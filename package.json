@@ -10,7 +10,6 @@
     "test": "vitest run",
     "eval": "tsx --conditions=react-server scripts/eval.ts",
     "build-index": "tsx --conditions=react-server scripts/build-index.ts",
-    "smoke": "tsx --conditions=react-server scripts/smoke-models.ts",
     "run": "tsx --conditions=react-server scripts/run.ts",
     "ledger": "tsx --conditions=react-server scripts/ledger.ts",
     "verify:hosted": "tsx --conditions=react-server scripts/verify-hosted.ts"

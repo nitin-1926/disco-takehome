@@ -10,12 +10,12 @@
 //                                       then replays every committed input in a child process and asserts zero live calls
 //   npm run eval -- --bakeoff           embedding scorer vs rubric; understand+scoring on Luna; critic on Sol; effort
 //                                       low vs medium; creatives low vs medium judged; reversed catalog (docs/eval/bakeoff.md)
-//   npm run eval -- --judge             Luna judge per creative (docs/eval/judge.md, eval/hand-label-checklist.md, κ if labelled)
+//   npm run eval -- --judge             Luna judge per creative (docs/eval/judge.md, docs/eval/hand-label-checklist.md, κ if labelled)
 //   npm run eval -- --verify-replay     (internal) replay-only run of every committed input
 //
 // --write-cache is exclusive with --bakeoff and --judge.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 if (existsSync('.env.local')) process.loadEnvFile('.env.local');
 
@@ -70,7 +70,6 @@ function evalCtx(o: { read: boolean; replayOnly?: boolean; write?: boolean; wall
     cacheMode: { read: o.read, replayOnly: !!o.replayOnly, writeCommitted: !!o.write },
     spend: null,
     defer: (t) => deferred.push(t),
-    source: 'local',
     deferred,
     events,
   };
@@ -599,10 +598,11 @@ async function judge(runs: Run[]): Promise<void> {
   for (const c of JUDGE_CRITERIA) J.push(`- ${c}: ${rows.filter((r) => r.verdicts[c]?.pass).length}/${rows.length}`);
   J.push('', '## Critiques on failures', '');
   for (const r of rows) for (const c of JUDGE_CRITERIA) if (r.verdicts[c] && !r.verdicts[c].pass) J.push(`- ${r.key} ${c}: ${r.verdicts[c].critique} ("${r.heading}" / "${r.subheading}")`);
+  mkdirSync('docs/eval', { recursive: true });
   writeFileSync('docs/eval/judge.md', J.join('\n') + '\n');
 
   // Hand-label checklist; if one is already filled in, compute κ against it first.
-  const path = 'eval/hand-label-checklist.md';
+  const path = 'docs/eval/hand-label-checklist.md';
   const kappa = existsSync(path) ? kappaFrom(readFileSync(path, 'utf8'), rows) : null;
   const C = ['# Hand-label checklist', '', 'Replace each `?` with `y` (pass) or `n` (fail) in your columns, then run `npm run eval -- --judge` again to get Cohen\'s κ per criterion against the judge. The judge\'s own answers are in docs/eval/judge.md; do not look before labelling.', ''];
   C.push('| key | persona | heading | subheading | ' + JUDGE_CRITERIA.join(' | ') + ' |', '|---|---|---|---|' + JUDGE_CRITERIA.map(() => '---').join('|') + '|');
@@ -668,6 +668,7 @@ async function main(): Promise<number> {
   writeFileSync('eval/output.md', md);
 
   if (has('--bakeoff')) {
+    mkdirSync('docs/eval', { recursive: true });
     writeFileSync('docs/eval/bakeoff.md', await bakeoff(runs, exps));
     console.log('Wrote docs/eval/bakeoff.md');
   }

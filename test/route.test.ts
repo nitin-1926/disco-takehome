@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
     isVercel: false,
     retrieveK: 20,
     spendCapUsd: 25,
+    spendCapDailyUsd: 10,
     spendEpoch: 'test',
     rateLimitRuns: 20,
     rateLimitWindowMin: 60,
@@ -48,7 +49,7 @@ function spyStore() {
 const defaultImpl = async (_i: string, _s: unknown, ctx: RunContext) => {
   ctx.sink({ type: 'stage', stage: 'understand', status: 'started' });
   if (ctx.spend) {
-    const r = await ctx.spend.reserve(0.05, 'understand');
+    const r = await ctx.spend.reserve(0.05);
     if (r.ok) ctx.defer(() => ctx.spend!.settle(r.id, 0.01));
   }
   const summary = { run_id: ctx.run_id, cost_live_usd: ctx.spend ? 0.01 : 0, cost_replayed_usd: 0, calls: [], total_ms: 1, cold: false, skipped: [], errors: [] };
@@ -70,7 +71,7 @@ async function drainAfter() {
 }
 
 beforeEach(() => {
-  Object.assign(h.env, { openaiKey: 'sk-test', isVercel: false, spendCapUsd: 25, rateLimitRuns: 20 });
+  Object.assign(h.env, { openaiKey: 'sk-test', isVercel: false, spendCapUsd: 25, spendCapDailyUsd: 10, rateLimitRuns: 20 });
   h.after.length = 0;
   h.impl = defaultImpl;
   store = spyStore();
@@ -128,13 +129,14 @@ describe('POST /api/run', () => {
     expect((await POST(req('{nope'))).status).toBe(400);
   });
 
-  test('cross-site fetch metadata, missing origin, or non-JSON content type → 403', async () => {
+  test('cross-site fetch metadata or missing origin → 403; non-JSON → 415; oversized → 413', async () => {
     expect((await POST(req({ input: 'x' }, { 'sec-fetch-site': 'cross-site' }))).status).toBe(403);
     const noMeta = new Request('http://localhost/api/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"input":"x"}' });
     expect((await POST(noMeta)).status).toBe(403);
     const sameHost = new Request('http://localhost/api/run', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', host: 'localhost' }, body: '{"input":"We sell mugs."}' });
     expect((await POST(sameHost)).status).toBe(200);
-    expect((await POST(req({ input: 'x' }, { 'content-type': 'text/plain' }))).status).toBe(403);
+    expect((await POST(req({ input: 'x' }, { 'content-type': 'text/plain' }))).status).toBe(415);
+    expect((await POST(req({ input: 'x' }, { 'content-length': '100000' }))).status).toBe(413);
   });
 
   test('cap headroom insufficient → 429 spend_cap, lock released', async () => {
@@ -148,16 +150,44 @@ describe('POST /api/run', () => {
   test('over the window → 429 rate_limited with retry-after', async () => {
     h.env.rateLimitRuns = 1;
     await (await POST(req({ input: 'We sell mugs.' }))).text();
+    await drainAfter();
     const res = await POST(req({ input: 'We sell mugs.' }));
     expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe('rate_limited');
     expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+    // A refusal releases the lock it took.
+    expect(await store.lock('inflight:local', 'next', 60)).toBe(true);
   });
 
-  test('a run already in flight → 429', async () => {
+  test('a run already in flight → 429 in_progress, and it does not use up a window run', async () => {
+    h.env.rateLimitRuns = 1;
     await store.lock('inflight:local', 'someone', 60);
     const res = await POST(req({ input: 'We sell mugs.' }));
     expect(res.status).toBe(429);
-    expect((await res.json()).message).toMatch(/in progress/);
+    expect((await res.json()).error).toBe('in_progress');
+    await store.unlock('inflight:local', 'someone');
+    expect((await POST(req({ input: 'We sell mugs.' }))).status).toBe(200);
+  });
+
+  test('daily cap headroom insufficient → 429 daily_cap with retry-after to UTC midnight', async () => {
+    h.env.spendCapDailyUsd = 0.05;
+    const res = await POST(req({ input: 'We sell mugs.' }));
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe('daily_cap');
+    const retry = Number(res.headers.get('retry-after'));
+    expect(retry).toBeGreaterThan(0);
+    expect(retry).toBeLessThanOrEqual(86_400);
+  });
+
+  test('a pipeline that throws still ends the stream with done, and the ledger marks it crashed', async () => {
+    h.impl = async () => {
+      throw new Error('boom');
+    };
+    const text = await (await POST(req({ input: 'We sell mugs.' }))).text();
+    expect(text).toMatch(/event: error/);
+    expect(text).toMatch(/event: done/);
+    await drainAfter();
+    expect(await store.lock('inflight:local', 'next', 60)).toBe(true);
   });
 
   test('key missing → 503 for live, replay still 200', async () => {
@@ -180,7 +210,7 @@ describe('POST /api/run', () => {
     let sawAbort = false;
     h.impl = async (_i, _s, ctx) => {
       ctx.sink({ type: 'stage', stage: 'understand', status: 'started' });
-      await ctx.spend!.reserve(0.05, 'understand');
+      await ctx.spend!.reserve(0.05);
       await new Promise<void>((resolve) => ctx.signal!.addEventListener('abort', () => resolve(), { once: true }));
       sawAbort = true;
       return { summary: { run_id: ctx.run_id, cost_live_usd: 0, cost_replayed_usd: 0, calls: [], total_ms: 1, cold: false, skipped: [], errors: [{ stage: 'understand', code: 'aborted' }] } };
@@ -191,8 +221,8 @@ describe('POST /api/run', () => {
     ac.abort();
     await reader.cancel().catch(() => {});
     await vi.waitFor(() => expect(sawAbort).toBe(true));
-    await vi.waitFor(async () => expect(await store.lock('inflight:local', 'next', 60)).toBe(true));
     await drainAfter();
+    expect(await store.lock('inflight:local', 'next', 60)).toBe(true);
     // The reservation stays whole: nothing settled it down.
     expect(await store.get('spend:test')).toBe(spend.toMicro(0.05));
   });

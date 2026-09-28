@@ -8,12 +8,14 @@ import type { SpendHook } from './types';
 // Spend cap, per-client limiter, in-flight lock and run ledger (F20, F23). Money is kept in integer micro-dollars
 // so the counter never drifts. Reservation is one server-side script: read, compare with the cap, increment only on
 // success, so a refused reservation never touches the counter. Settlement adjusts to the actual cost afterwards.
+// Two counters move together: the epoch total (the hard money ceiling) and today's (UTC) counter with its own cap, so a
+// bad day (or reservations held by cancelled runs) pauses live runs until midnight rather than for good.
 
 export interface SpendStore {
-  kind: 'upstash' | 'memory';
-  /** Atomic: increment by `micro` only if the result stays ≤ capMicro. */
-  reserve(key: string, micro: number, capMicro: number): Promise<boolean>;
-  adjust(key: string, deltaMicro: number): Promise<void>;
+  /** Atomic: increment every key by `micro` only if each stays ≤ its cap. Keys after the first expire after ttlSec. */
+  reserve(keys: string[], micro: number, capsMicro: number[], ttlSec: number): Promise<boolean>;
+  /** Adjust the first key, and each later key only while it still exists (a settle after midnight leaves a new day alone). */
+  adjust(keys: string[], deltaMicro: number): Promise<void>;
   get(key: string): Promise<number>;
   /** SET NX with TTL; true when acquired. */
   lock(key: string, token: string, ttlSec: number): Promise<boolean>;
@@ -27,9 +29,18 @@ export interface SpendStore {
 
 // ---- Upstash (REST) ----
 
-const RESERVE = `local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
-if cur + tonumber(ARGV[1]) > tonumber(ARGV[2]) then return 0 end
-redis.call('INCRBY', KEYS[1], ARGV[1])
+const RESERVE = `for i = 1, #KEYS do
+  if tonumber(redis.call('GET', KEYS[i]) or '0') + tonumber(ARGV[1]) > tonumber(ARGV[i + 2]) then return 0 end
+end
+for i = 1, #KEYS do
+  redis.call('INCRBY', KEYS[i], ARGV[1])
+  if i > 1 then redis.call('EXPIRE', KEYS[i], ARGV[2]) end
+end
+return 1`;
+const ADJUST = `redis.call('INCRBY', KEYS[1], ARGV[1])
+for i = 2, #KEYS do
+  if redis.call('EXISTS', KEYS[i]) == 1 then redis.call('INCRBY', KEYS[i], ARGV[1]) end
+end
 return 1`;
 const UNLOCK = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
 return 0`;
@@ -41,10 +52,9 @@ function upstashStore(): SpendStore | null {
   const r = getRedis();
   if (!r) return null;
   return {
-    kind: 'upstash',
-    reserve: async (key, micro, cap) => (await r.eval(RESERVE, [key], [String(micro), String(cap)])) === 1,
-    adjust: async (key, delta) => {
-      if (delta !== 0) await r.incrby(key, delta);
+    reserve: async (keys, micro, caps, ttl) => (await r.eval(RESERVE, keys, [String(micro), String(ttl), ...caps.map(String)])) === 1,
+    adjust: async (keys, delta) => {
+      if (delta !== 0) await r.eval(ADJUST, keys, [String(delta)]);
     },
     get: async (key) => Number((await r.get<number | string>(key)) ?? 0),
     lock: async (key, token, ttl) => (await r.set(key, token, { nx: true, ex: ttl })) === 'OK',
@@ -74,15 +84,15 @@ export function memoryStore(now: () => number = Date.now): SpendStore {
   const windows = new Map<string, { count: number; until: number }>();
   const ledgers = new Map<string, unknown[]>();
   return {
-    kind: 'memory',
-    reserve: async (key, micro, cap) => {
-      const cur = counters.get(key) ?? 0;
-      if (cur + micro > cap) return false;
-      counters.set(key, cur + micro);
+    reserve: async (keys, micro, caps) => {
+      if (keys.some((k, i) => (counters.get(k) ?? 0) + micro > caps[i])) return false;
+      for (const k of keys) counters.set(k, (counters.get(k) ?? 0) + micro);
       return true;
     },
-    adjust: async (key, delta) => {
-      counters.set(key, (counters.get(key) ?? 0) + delta);
+    adjust: async (keys, delta) => {
+      keys.forEach((k, i) => {
+        if (i === 0 || counters.has(k)) counters.set(k, (counters.get(k) ?? 0) + delta);
+      });
     },
     get: async (key) => counters.get(key) ?? 0,
     lock: async (key, token, ttl) => {
@@ -129,10 +139,12 @@ let healthy: { ok: boolean; at: number; rttMs: number } | null = null;
 /** Round trip of the last health probe from this instance (the ledger records it). */
 export const lastProbeRttMs = () => healthy?.rttMs ?? null;
 const HEALTH_TTL_MS = 60_000;
-/** Startup increment probe, cached per instance for a minute. */
+/** A failed probe is retried soon: one blip must not refuse live runs on this instance for a full minute. */
+const HEALTH_FAIL_TTL_MS = 5_000;
+/** Startup increment probe, cached per instance. */
 export async function storeHealthy(s: SpendStore | null = spendStore()): Promise<boolean> {
   if (!s) return false;
-  if (healthy && Date.now() - healthy.at < HEALTH_TTL_MS) return healthy.ok;
+  if (healthy && Date.now() - healthy.at < (healthy.ok ? HEALTH_TTL_MS : HEALTH_FAIL_TTL_MS)) return healthy.ok;
   let ok = false;
   const t0 = Date.now();
   try {
@@ -148,7 +160,16 @@ export async function storeHealthy(s: SpendStore | null = spendStore()): Promise
 
 export const toMicro = (usd: number) => Math.round(usd * 1_000_000);
 export const spendKey = (epoch = env().spendEpoch) => `spend:${epoch}`;
+const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
+export const dailySpendKey = (now = Date.now(), epoch = env().spendEpoch) => `spend:${epoch}:${utcDay(now)}`;
 export const ledgerKey = (epoch = env().spendEpoch) => `ledger:${epoch}`;
+/** A day key outlives its day so a late settle still finds it. */
+const DAILY_TTL_SEC = 2 * 86_400;
+export function secondsToUtcMidnight(now = Date.now()): number {
+  const next = new Date(now);
+  next.setUTCHours(24, 0, 0, 0);
+  return Math.max(1, Math.ceil((next.getTime() - now) / 1000));
+}
 
 /** Worst case for one live run: every call at its full cap (courtesy pre-check only; the real gate is per call). */
 export function runWorstCaseUsd(): number {
@@ -157,23 +178,29 @@ export function runWorstCaseUsd(): number {
   return once.reduce((n, s) => n + worstCaseUsd(s), 0) + 10 * worstCaseUsd('score_personas') + CREATIVES_MAX * perCard.reduce((n, s) => n + worstCaseUsd(s), 0);
 }
 
-/** The hook callLLM uses: reserve the step's worst case before the call, settle to the actual cost after. */
-export function spendHook(s: SpendStore, opts: { key?: string; capUsd?: number } = {}): SpendHook & { reservedMicro: () => number } {
+/** The hook callLLM uses: reserve the step's worst case against both caps before the call, settle to the actual cost after. */
+export function spendHook(
+  s: SpendStore,
+  opts: { key?: string; capUsd?: number; dailyCapUsd?: number; now?: () => number } = {},
+): SpendHook & { reservedMicro: () => number } {
+  const now = opts.now ?? Date.now;
   const key = opts.key ?? spendKey();
-  const cap = toMicro(opts.capUsd ?? env().spendCapUsd);
-  const reserved = new Map<string, number>();
+  const caps = [toMicro(opts.capUsd ?? env().spendCapUsd), toMicro(opts.dailyCapUsd ?? env().spendCapDailyUsd)];
+  const reserved = new Map<string, { micro: number; keys: string[] }>();
   let total = 0;
   return {
     async reserve(estimateUsd) {
       const micro = Math.max(1, Math.ceil(estimateUsd * 1_000_000));
+      // The day key is fixed at reservation time, so its settle adjusts the same day.
+      const keys = [key, `${key}:${utcDay(now())}`];
       try {
-        if (!(await s.reserve(key, micro, cap))) return { ok: false, reason: 'cap' };
+        if (!(await s.reserve(keys, micro, caps, DAILY_TTL_SEC))) return { ok: false, reason: 'cap' };
       } catch (e) {
         console.error('[spend] reserve failed', (e as Error).message);
         return { ok: false, reason: 'store' };
       }
       const id = randomUUID();
-      reserved.set(id, micro);
+      reserved.set(id, { micro, keys });
       total += micro;
       return { ok: true, id };
     },
@@ -181,10 +208,10 @@ export function spendHook(s: SpendStore, opts: { key?: string; capUsd?: number }
       const r = reserved.get(id);
       if (r === undefined) return;
       reserved.delete(id);
-      const delta = toMicro(actualUsd) - r;
+      const delta = toMicro(actualUsd) - r.micro;
       total += delta;
       try {
-        await s.adjust(key, delta);
+        await s.adjust(r.keys, delta);
       } catch (e) {
         console.error('[spend] settle failed; reservation stays on the counter', (e as Error).message);
       }
@@ -203,6 +230,15 @@ export function clientBucket(headers: Headers, isVercel = env().isVercel): strin
   if (!isVercel) return 'local';
   const xff = headers.get('x-forwarded-for')?.split(',').map((x) => x.trim()).filter(Boolean) ?? [];
   const ip = headers.get('x-real-ip')?.trim() || xff.at(-1) || 'unknown';
-  if (ip.includes(':')) return `v6:${ip.split(':').slice(0, 4).join(':')}`;
+  if (ip.includes(':')) return `v6:${ipv6Groups(ip).slice(0, 4).join(':')}`;
   return ip;
+}
+
+/** Eight 16-bit groups of an IPv6 address, '::' expanded and leading zeros dropped (so one /64 is one bucket). */
+function ipv6Groups(ip: string): string[] {
+  const [head, tail] = ip.split('::');
+  const a = head ? head.split(':') : [];
+  const b = tail !== undefined && tail !== '' ? tail.split(':') : [];
+  const groups = tail === undefined ? a : [...a, ...Array(Math.max(0, 8 - a.length - b.length)).fill('0'), ...b];
+  return groups.map((g) => (g.replace(/^0+(?=.)/, '') || '0').toLowerCase());
 }

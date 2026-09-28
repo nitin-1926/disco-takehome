@@ -5,10 +5,11 @@ import type { z } from 'zod';
 import { cacheGet, cacheKey, pendingCommitted, redisSet, sha256, type CacheEntry } from './cache';
 import { env } from './env';
 import { MODEL_IDS, STEPS, costUsd, worstCaseUsd, type Reasoning, type StepName, type TokenUsage } from './models';
+import { REPAIR_SYSTEM, repairPrompt, retrySuffix } from '../prompts/repair';
 import type { CallRecord, ErrorCode, RunContext, Source } from './types';
 
 // The one seam every LLM call goes through: prompt assembly, cache, spend reservation, timeout/abort,
-// schema validation with one repair, cost, deferred writes. pipeline.ts never touches cache or spend directly.
+// schema validation with one repair (prompts/repair.ts), cost, deferred writes. pipeline.ts never touches cache or spend directly.
 
 export interface PromptModule<TArgs, TOut> {
   /** Stable id; part of the cache key and shown in the trace drawer as the prompt file. */
@@ -28,9 +29,6 @@ export interface CallOptions<TOut = unknown> {
   timeoutMs?: number;
   reasoning?: Reasoning;
   modelId?: string;
-  label?: string;
-  /** Extra cancel signal for this call only (a side branch the run no longer needs); ctx.signal still applies. */
-  signal?: AbortSignal;
   /** Code check beyond the schema (e.g. every id exactly once). Returns a problem or null. A failing output is never cached; one retry. */
   validate?: (output: TOut) => string | null;
 }
@@ -66,6 +64,8 @@ function model(id: string): LanguageModel {
 }
 
 const DEFAULT_TIMEOUT_MS = 25_000;
+/** Below this, a repair or retry could not finish; the call fails as a timeout instead of starting one. */
+const MIN_ATTEMPT_MS = 1_500;
 
 function usageOf(u: {
   inputTokens?: number;
@@ -109,7 +109,8 @@ export async function callLLM<TArgs, TOut>(
 
   const started = Date.now();
   const cached = await cacheGet(key, ctx.cacheMode);
-  const hit = cached && !opts.validate?.(cached.entry.output as TOut) ? cached : null;
+  // A cached answer must still fit today's schema and code check; one that does not is a miss, never served.
+  const hit = cached && mod.schema.safeParse(cached.entry.output).success && !opts.validate?.(cached.entry.output as TOut) ? cached : null;
   if (hit) {
     // --write-cache carries forward every entry this run used, not only the new ones.
     if (ctx.cacheMode.writeCommitted) pendingCommitted.set(key, hit.entry);
@@ -123,17 +124,21 @@ export async function callLLM<TArgs, TOut>(
   if (ctx.cacheMode.replayOnly) {
     throw new LlmError('cache_miss', mod.id, `No cached output for ${mod.id}; sample cache is stale`);
   }
-  const signal = opts.signal && ctx.signal ? AbortSignal.any([ctx.signal, opts.signal]) : (opts.signal ?? ctx.signal);
+  const signal = ctx.signal;
   if (signal?.aborted) throw new LlmError('aborted', mod.id, 'Run aborted before call');
 
-  let reservation: string | null = null;
-  if (ctx.spend) {
-    const r = await ctx.spend.reserve(worstCaseUsd(mod.step), opts.label ?? mod.id);
-    if (!r.ok) throw new LlmError('spend_refused', mod.id, r.reason === 'cap' ? 'Spend cap reached' : 'Spend store unavailable');
-    reservation = r.id;
-  }
+  // Every attempt (first, repair, retry) reserves its own worst case first, so a retry cannot overshoot the cap.
+  const reservations: string[] = [];
+  const reserve = async (s: StepName) => {
+    if (!ctx.spend) return;
+    const r = await ctx.spend.reserve(worstCaseUsd(s));
+    if (!r.ok) throw new LlmError(r.reason === 'cap' ? 'spend_refused' : 'store_error', mod.id, r.reason === 'cap' ? 'Spend cap reached' : 'Spend store unavailable');
+    reservations.push(r.id);
+  };
 
+  // One deadline across all attempts: a repair or retry gets what is left of the call's budget, not a fresh one.
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = started + timeoutMs;
   const userPrompt = mod.build(args);
   const raws: string[] = [];
   let usage: TokenUsage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
@@ -141,6 +146,8 @@ export async function callLLM<TArgs, TOut>(
   // and a failed attempt's tokens still count when the provider reports them.
   let cost = 0;
   let output: TOut;
+  // Abort or timeout with a request in flight: the provider may have billed tokens we never saw, so reservations stay whole.
+  let keepWhole = false;
   const account = (m: string, raw: Parameters<typeof usageOf>[0] | undefined) => {
     if (!raw) return;
     const u = usageOf(raw);
@@ -150,10 +157,13 @@ export async function callLLM<TArgs, TOut>(
       outputTokens: usage.outputTokens + u.outputTokens,
       reasoningTokens: usage.reasoningTokens + u.reasoningTokens,
     };
-    cost += safeCost(m, u);
+    cost += costUsd(m, u);
   };
 
-  const run = async (system: string, prompt: string, m: string, effort: Reasoning, cap: number) => {
+  const run = async (s: StepName, system: string, prompt: string, m: string, effort: Reasoning, cap: number) => {
+    const left = deadline - Date.now();
+    if (left < MIN_ATTEMPT_MS) throw new LlmError('timeout', mod.id, 'No time left for another attempt', raws);
+    await reserve(s);
     try {
       const res = await generateText({
         model: model(m),
@@ -168,7 +178,7 @@ export async function callLLM<TArgs, TOut>(
         maxOutputTokens: cap,
         maxRetries: 2,
         abortSignal: signal,
-        timeout: { totalMs: timeoutMs },
+        timeout: { totalMs: left },
         providerOptions: {
           openai: {
             reasoningEffort: effort,
@@ -183,21 +193,21 @@ export async function callLLM<TArgs, TOut>(
       return res.output as TOut;
     } catch (e) {
       if (NoObjectGeneratedError.isInstance(e)) account(m, (e as { usage?: Parameters<typeof usageOf>[0] }).usage);
+      else if (classify(e, Date.now() >= deadline) !== 'provider_error') keepWhole = true;
       throw e;
     }
   };
 
   try {
     try {
-      output = await run(mod.instructions, userPrompt, modelId, reasoning, step.maxOutputTokens);
+      output = await run(mod.step, mod.instructions, userPrompt, modelId, reasoning, step.maxOutputTokens);
     } catch (e) {
       if (!NoObjectGeneratedError.isInstance(e)) throw e;
       raws.push(e.text ?? '');
       // One repair on the cheap model: fix the JSON to satisfy the schema, nothing else.
       const repair = STEPS.repair;
-      const repairPrompt = `The JSON below failed validation.\nError: ${e.message}\n\nJSON:\n${e.text ?? ''}\n\nReturn only corrected JSON that satisfies the schema. Keep every value that already fits.`;
       try {
-        output = await run('You repair JSON to match a schema. Output only JSON.', repairPrompt, MODEL_IDS[repair.model], repair.reasoning, repair.maxOutputTokens);
+        output = await run('repair', REPAIR_SYSTEM, repairPrompt(e.message, e.text ?? ''), MODEL_IDS[repair.model], repair.reasoning, repair.maxOutputTokens);
       } catch (e2) {
         if (NoObjectGeneratedError.isInstance(e2)) {
           raws.push(e2.text ?? '');
@@ -209,9 +219,13 @@ export async function callLLM<TArgs, TOut>(
     const problem = opts.validate?.(output);
     if (problem) {
       // One retry with the problem named; the rejected answer is never cached.
-      // ponytail: the reservation covers one attempt; settle charges the real total, so a retry can overshoot the cap by one call.
       raws.push(JSON.stringify(output));
-      output = await run(mod.instructions, `${userPrompt}\n\nYour previous answer was rejected: ${problem}. Answer again in full.`, modelId, reasoning, step.maxOutputTokens);
+      try {
+        output = await run(mod.step, mod.instructions, `${userPrompt}${retrySuffix(problem)}`, modelId, reasoning, step.maxOutputTokens);
+      } catch (e2) {
+        if (NoObjectGeneratedError.isInstance(e2)) throw new LlmError('schema_invalid', mod.id, `Retry failed schema: ${e2.message}`, raws);
+        throw e2;
+      }
       const again = opts.validate?.(output);
       if (again) {
         raws.push(JSON.stringify(output));
@@ -219,15 +233,13 @@ export async function callLLM<TArgs, TOut>(
       }
     }
   } catch (e) {
-    const code = e instanceof LlmError ? e.code : classify(e, Date.now() - started >= timeoutMs);
-    // Abort or timeout: the provider may have billed tokens we never saw, so the reservation stays whole.
-    if (code !== 'aborted' && code !== 'timeout') settle(ctx, reservation, cost);
+    if (!keepWhole) settle(ctx, reservations, cost);
     if (e instanceof LlmError) throw e;
-    throw new LlmError(code, mod.id, String((e as Error)?.message ?? e));
+    throw new LlmError(classify(e, Date.now() >= deadline), mod.id, String((e as Error)?.message ?? e));
   }
 
   const entry: CacheEntry = { output, usage, costUsd: cost, model: modelId, promptVersion: mod.promptVersion, storedAt: new Date().toISOString() };
-  settle(ctx, reservation, cost);
+  settle(ctx, reservations, cost);
   ctx.defer(() => redisSet(key, entry));
   if (ctx.cacheMode.writeCommitted) pendingCommitted.set(key, entry);
 
@@ -239,16 +251,9 @@ export async function callLLM<TArgs, TOut>(
   };
 }
 
-function safeCost(modelId: string, usage: TokenUsage): number {
-  try {
-    return costUsd(modelId, usage);
-  } catch {
-    return 0;
-  }
-}
-
-function settle(ctx: RunContext, reservation: string | null, actualUsd: number): void {
-  if (!ctx.spend || !reservation) return;
+/** The first reservation settles to the whole actual cost; any extra (repair, retry) settles to zero. */
+function settle(ctx: RunContext, reservations: string[], actualUsd: number): void {
+  if (!ctx.spend || !reservations.length) return;
   const spend = ctx.spend;
-  ctx.defer(() => spend.settle(reservation, actualUsd));
+  reservations.forEach((id, i) => ctx.defer(() => spend.settle(id, i === 0 ? actualUsd : 0)));
 }

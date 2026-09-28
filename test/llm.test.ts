@@ -54,7 +54,6 @@ function ctx(over: Partial<RunContext> = {}): RunContext & { deferred: Array<() 
     cacheMode: { read: true, replayOnly: false, writeCommitted: false },
     spend: null,
     defer: (t) => deferred.push(t),
-    source: 'local',
     deferred,
     events,
     ...over,

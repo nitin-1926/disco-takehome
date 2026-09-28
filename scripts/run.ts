@@ -18,7 +18,7 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-export function makeCliContext(opts: { live?: boolean } = {}): RunContext & { deferred: Array<() => Promise<void>> } {
+function makeCliContext(opts: { live?: boolean } = {}): RunContext & { deferred: Array<() => Promise<void>> } {
   const deferred: Array<() => Promise<void>> = [];
   return {
     run_id: `cli-${Date.now()}`,
@@ -31,7 +31,6 @@ export function makeCliContext(opts: { live?: boolean } = {}): RunContext & { de
     cacheMode: { read: !opts.live, replayOnly: false, writeCommitted: false },
     spend: null,
     defer: (t) => deferred.push(t),
-    source: 'local',
     deferred,
   };
 }
@@ -102,10 +101,7 @@ function printReport(r: PipelineResult) {
   console.log(`per call: ${s.calls.map((c) => `${c.module} ${c.source} ${c.ms}ms out ${c.outputTokens} (r ${c.reasoningTokens}) in ${c.inputTokens} (cached ${c.cachedInputTokens})`).join(" | ")}`);
 }
 
-const invokedDirectly = process.argv[1]?.endsWith('run.ts');
-if (invokedDirectly) {
-  main().catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
-}
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

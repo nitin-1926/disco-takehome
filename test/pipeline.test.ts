@@ -20,8 +20,8 @@ vi.mock('@/lib/llm', async (orig) => {
   const actual = await orig<typeof import('@/lib/llm')>();
   return {
     ...actual,
-    callLLM: async (mod: { id: string }, args: Record<string, unknown>, _ctx: RunContext, opts: { validate?: (o: unknown) => string | null; timeoutMs?: number; signal?: AbortSignal } = {}) => {
-      h.log.push({ id: mod.id, args, timeoutMs: opts.timeoutMs, signal: opts.signal });
+    callLLM: async (mod: { id: string }, args: Record<string, unknown>, _ctx: RunContext, opts: { validate?: (o: unknown) => string | null; timeoutMs?: number } = {}) => {
+      h.log.push({ id: mod.id, args, timeoutMs: opts.timeoutMs });
       h.timeline.push(`start:${mod.id}`);
       await new Promise((r) => setTimeout(r, h.delays[mod.id] ?? 1));
       let out = h.responders[mod.id](args, opts, 1);
@@ -49,8 +49,8 @@ function defaults() {
     understand: () => u1,
     'score-publishers': () => ({ scores: publisherDims[1], comparatives: [] }),
     'score-persona': (a) => {
-      const { persona_id: _id, ...rest } = personaJudgments[1].find((j) => j.persona_id === (a.persona as { id: string }).id)!;
-      return rest;
+      const j = personaJudgments[1].find((x) => x.persona_id === (a.persona as { id: string }).id)!;
+      return Object.fromEntries(Object.entries(j).filter(([k]) => k !== 'persona_id'));
     },
     creative: (a) => {
       const persona = a.persona as { name: string };
@@ -74,7 +74,6 @@ function ctx(over: Partial<RunContext> = {}): RunContext & { events: RunEvent[] 
     cacheMode: { read: true, replayOnly: false, writeCommitted: false },
     spend: null,
     defer: () => {},
-    source: 'local',
     events,
     ...over,
   };
@@ -234,16 +233,45 @@ describe('runPipeline (mocked LLM)', () => {
       triage: { clarity: 'vague', viability: 'weak', policy_banned: false, reason: 'unclear product' },
       chips: [{ label: 'Baby gear', text: 'A new kind of baby carrier for moms.', quote: 'for moms' }],
     });
-    const c = ctx();
+    const deferred: Array<() => Promise<void>> = [];
+    const c = ctx({ defer: (t) => deferred.push(t) });
     const r = await runPipeline(text, normalizeSettings(), c);
-    // Scoring and personas started beside understand (F25) and were cancelled once understand said stop.
+    // Scoring and personas started beside understand and are released, not aborted, once understand says stop:
+    // one deferred task waits for them so their spend settles at the real cost after the response.
     expect(new Set(h.log.map((l) => l.id))).toEqual(new Set(['score-persona', 'score-publishers', 'understand']));
-    expect(ids('score-publishers')[0].signal?.aborted).toBe(true);
-    expect(ids('score-persona').every((l) => l.signal?.aborted)).toBe(true);
+    expect(deferred).toHaveLength(1);
+    await deferred[0]();
+    expect(h.timeline.filter((t) => t.startsWith('end:score-persona'))).toHaveLength(10);
+    // Late calls never change the summary already sent.
+    expect(r.summary.calls.map((x) => x.module)).toEqual(['understand']);
     expect(ids('creative')).toHaveLength(0);
     expect(r.profile!.chips).toHaveLength(1);
     expect(r.config).toBeNull();
     expect(errorsOf(c.events)).toEqual([]);
+  });
+
+  test('understand fails → every other stage settles (skipped), none is left started', async () => {
+    h.responders.understand = () => {
+      throw new LlmError('timeout', 'understand', 'slow');
+    };
+    const c = ctx();
+    await runPipeline(input, normalizeSettings(), c);
+    const last = new Map<string, string>();
+    for (const e of c.events) if (e.type === 'stage') last.set(e.stage, e.status);
+    for (const e of c.events) if (e.type === 'error') last.set(e.stage, 'error');
+    expect([...last].filter(([, st]) => st === 'started')).toEqual([]);
+    expect(last.get('score_publishers')).toBe('skipped');
+    expect(c.events.at(-1)!.type).toBe('done');
+  });
+
+  test('policy-banned input: the streamed config event already carries the Policy warning', async () => {
+    h.responders.understand = () => ({ ...u1, triage: { ...u1.triage, policy_banned: true, reason: 'nicotine' } });
+    // Serialise at emit time, as the route does: a warning mutated in after the event would be missing here.
+    const sentEvents: string[] = [];
+    const r = await runPipeline('Premium nicotine pouches in six flavours.', normalizeSettings(), ctx({ sink: (e) => sentEvents.push(JSON.stringify(e)) }));
+    expect(r.config!.budget.total_usd).toBe(0);
+    const sent = sentEvents.map((x) => JSON.parse(x)).find((e) => e.type === 'stage' && e.stage === 'config' && e.status === 'done') as { payload: { config: { warnings: string[] } } };
+    expect(sent.payload.config.warnings[0]).toMatch(/^Policy:/);
   });
 
   test('model says none but scores overrule → personas run after scoring, weak budget', async () => {
@@ -253,15 +281,16 @@ describe('runPipeline (mocked LLM)', () => {
     expect(r.triage!.viability).toBe('weak');
     const doneAt = (stage: string) => c.events.findIndex((e) => e.type === 'stage' && e.stage === stage && e.status === 'done');
     expect(doneAt('score_personas')).toBeGreaterThan(doneAt('score_publishers'));
-    expect(ids('score-persona')[0].signal?.aborted).toBe(false);
+    expect(r.personas).not.toBeNull();
     expect(r.config!.budget.viability_factor).toBe(0.4);
   });
 
   test('model says none and scores agree → $0 config, no personas', async () => {
     h.responders.understand = () => ({ ...u1, triage: { clarity: 'clear', viability: 'none', policy_banned: false, reason: 'x' } });
     h.responders['score-publishers'] = () => ({ scores: publisherDims[1].map((d) => ({ ...d, category_fit: 0 })), comparatives: [] });
-    const r = await runPipeline(input, normalizeSettings(), ctx());
-    expect(ids('score-persona')[0].signal?.aborted).toBe(true);
+    const deferred: Array<() => Promise<void>> = [];
+    const r = await runPipeline(input, normalizeSettings(), ctx({ defer: (t) => deferred.push(t) }));
+    expect(deferred).toHaveLength(1); // the persona calls, released
     expect(ids('creative')).toHaveLength(0);
     expect(r.personas).toBeNull();
     expect(r.config!.budget.total_usd).toBe(0);

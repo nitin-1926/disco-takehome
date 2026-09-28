@@ -215,7 +215,7 @@ function detail(s: Scored): string[] {
   }
   const cfg = r.config;
   if (cfg) {
-    L.push('', `Config: budget $${cfg.budget.total_usd} (factor ${cfg.budget.viability_factor}), ${cfg.bidding.model} CPA $${cfg.bidding.fixed_cpa_usd}${cfg.bidding.cpc_alternative ? `, CPC alternative $${cfg.bidding.cpc_alternative.min_usd}-${cfg.bidding.cpc_alternative.max_usd}` : ''}, flight ${cfg.flight.start} → ${cfg.flight.end}${cfg.flight.seasonality_note ? ` (${cfg.flight.seasonality_note})` : ''}.`);
+    L.push('', `Config: budget $${cfg.budget.total_usd} (factor ${cfg.budget.viability_factor}), ${cfg.bidding.model} CPA $${cfg.bidding.cpa_usd}${cfg.bidding.cpc_alternative ? `, CPC alternative $${cfg.bidding.cpc_alternative.min_usd}-${cfg.bidding.cpc_alternative.max_usd}` : ''}, flight ${cfg.flight.start} → ${cfg.flight.end}${cfg.flight.seasonality_note ? ` (${cfg.flight.seasonality_note})` : ''}.`);
     if (cfg.placements.length) L.push(`Placements: ${cfg.placements.map((x) => `${pubName(x.publisher_id)} $${x.allocation_usd} (${Math.round(x.share * 100)}%)`).join(', ')}.`);
     for (const w of cfg.warnings) L.push(`Warning: ${w}`);
   }

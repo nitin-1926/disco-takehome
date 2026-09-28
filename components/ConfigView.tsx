@@ -33,7 +33,7 @@ export function ConfigView({ state }: { state: RunState }) {
     const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `campaign-${slug(cfg.advertiser_profile.product)}.json`;
+    a.download = `campaign-${slug(cfg.campaign.name)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -43,9 +43,9 @@ export function ConfigView({ state }: { state: RunState }) {
       <div className="arrive grid grid-cols-1 gap-6">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-panel border border-line bg-surface p-4 text-sm sm:grid-cols-4">
           <Stat label="Budget" value={usd(cfg.budget.total_usd)} sub={cfg.budget.total_usd > 0 ? `${usd(cfg.budget.daily_cap_usd)} a day` : 'nothing to spend'} />
-          <Stat label="Bid" value={`CPA ${usd(cfg.bidding.fixed_cpa_usd, true)}`} sub={cfg.bidding.cpc_alternative ? `or CPC ${usd(cfg.bidding.cpc_alternative.min_usd, true)}-${usd(cfg.bidding.cpc_alternative.max_usd, true)}` : cfg.campaign.objective} />
+          <Stat label="Bid" value={`CPA ${usd(cfg.bidding.cpa_usd, true)}`} sub={cfg.bidding.cpc_alternative ? `or CPC ${usd(cfg.bidding.cpc_alternative.min_usd, true)}-${usd(cfg.bidding.cpc_alternative.max_usd, true)}` : cfg.campaign.objective} />
           <Stat label="Flight" value={`${cfg.flight.days} days`} sub={`${cfg.flight.start} to ${cfg.flight.end}`} />
-          <Stat label="Expected conversions" value={`${cfg.measurement.expected_conversions_range[0]}-${cfg.measurement.expected_conversions_range[1]}`} sub={`target ROAS ${cfg.measurement.target_roas}x`} />
+          <Stat label="Expected conversions" value={String(cfg.measurement.expected_conversions)} sub={`${cfg.measurement.attribution_days}-day attribution`} />
           {cfg.flight.seasonality_note && <p className="col-span-full text-xs text-ink-2">{cfg.flight.seasonality_note}</p>}
         </dl>
 
@@ -78,14 +78,12 @@ export function ConfigView({ state }: { state: RunState }) {
                   <tr key={p.publisher_id} className="border-b border-line/60 last:border-b-0">
                     <th scope="row" className="px-4 py-2 text-left font-sans text-sm font-medium">
                       {pubName(p.publisher_id)}
-                      {p.band === 'weak' && <span className="ml-2 text-xs font-normal text-ink-3">explore</span>}
+                      {p.role === 'explore' && <span className="ml-2 text-xs font-normal text-ink-3">explore</span>}
                     </th>
                     <td className="px-4 py-2 text-right">{pct(p.share)}</td>
                     <td className="px-4 py-2 text-right">{usd(p.allocation_usd)}</td>
-                    <td className="px-4 py-2 text-right">
-                      {p.conversions_range[0]}-{p.conversions_range[1]}
-                    </td>
-                    <td className="px-4 py-2 text-right">{p.inventory_used_pct}%</td>
+                    <td className="px-4 py-2 text-right">{p.expected_conversions}</td>
+                    <td className="px-4 py-2 text-right">{p.inventory_used_pct < 0.1 ? '<0.1' : p.inventory_used_pct}%</td>
                   </tr>
                 ))}
               </tbody>

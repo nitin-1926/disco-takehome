@@ -120,15 +120,18 @@ export function reduce(state: RunState, action: Action): RunState {
             comparatives: (p.comparatives as RunState['comparatives']) ?? [],
           };
         case 'score_personas':
-          return { ...s, personas: mergePersonas(p.personas as PersonaScore[], s.config) };
+          return { ...s, personas: keepMapping(p.personas as PersonaScore[], s.personas, (x) => x.persona_id) };
         case 'creative':
         case 'critic':
         case 'revise':
-          return { ...s, creatives: mergeCreatives(p.creatives as Creative[], s.config) };
-        case 'config': {
-          const config = p.config as CampaignConfig;
-          return { ...s, config, creatives: mergeCreatives(s.creatives, config), personas: s.personas ? mergePersonas(s.personas, config) : s.personas };
-        }
+          return { ...s, creatives: keepMapping(p.creatives as Creative[], s.creatives, (x) => x.id) };
+        case 'config':
+          return {
+            ...s,
+            config: p.config as CampaignConfig,
+            creatives: keepMapping(s.creatives, (p.creatives as Creative[] | undefined) ?? null, (x) => x.id),
+            personas: s.personas && keepMapping(s.personas, (p.personas as PersonaScore[] | undefined) ?? null, (x) => x.persona_id),
+          };
         default:
           return s;
       }
@@ -136,16 +139,12 @@ export function reduce(state: RunState, action: Action): RunState {
   }
 }
 
-/** The config carries the final persona → publisher mapping; earlier events do not. */
-function mergeCreatives(creatives: Creative[], config: CampaignConfig | null): Creative[] {
-  if (!config) return creatives;
-  const mapped = new Map(config.creatives.map((c) => [c.id, c.publisher_ids]));
-  return creatives.map((c) => (mapped.has(c.id) ? { ...c, publisher_ids: mapped.get(c.id)! } : c));
-}
-function mergePersonas(personas: PersonaScore[], config: CampaignConfig | null): PersonaScore[] {
-  if (!config) return personas;
-  const mapped = new Map(config.personas.map((p) => [p.persona_id, p.publisher_ids]));
-  return personas.map((p) => (mapped.has(p.persona_id) ? { ...p, publisher_ids: mapped.get(p.persona_id)! } : p));
+/** The final persona → publisher mapping arrives with the config event; earlier events carry none. Events can arrive
+ * out of order, so an item keeps whichever mapping is already known when its own list is empty. */
+function keepMapping<T extends { publisher_ids: string[] }>(items: T[], known: T[] | null, key: (x: T) => string): T[] {
+  if (!known) return items;
+  const mapped = new Map(known.map((x) => [key(x), x.publisher_ids]));
+  return items.map((x) => (!x.publisher_ids.length && mapped.get(key(x))?.length ? { ...x, publisher_ids: mapped.get(key(x))! } : x));
 }
 
 /** Incremental SSE parser: feed it decoded text in any chunking; it calls back once per complete event. */

@@ -26,7 +26,7 @@ function validRun() {
       cta: 'Shop Now', offer: null, disclosure: null, claims_used: ['f3'], publisher_ids: [], constraints_respected: [],
       critic: { pass: true, checks: [], unverified: false }, revised_from: null, char_counts: { heading: 37, subheading: 37 }, grounding_flags: [], error: null,
     }));
-  const config = buildConfig({ profile, triage: profile.triage, settings, publisherScores: scores, personaScores: picks, creatives, publishers, meta: { run_id: 't', generated_at: 'x', pipeline_version: 'x', models: {} }, today: '2026-09-28' });
+  const config = buildConfig({ profile, triage: profile.triage, settings, publisherScores: scores, personaScores: picks, creatives, publishers, meta: { run_id: 't', generated_at: 'x', pipeline_version: 'x' }, today: '2026-09-28' });
   return { mode: 'full', profile, triage: profile.triage, publishers: scores, personas: picks, creatives, config };
 }
 const inv = (r: ReturnType<typeof validRun>) => invariants(r, catalog, { expectVerified: true, budgetUsd: settings.budgetUsd }).filter((c) => !c.pass).map((c) => c.name);
@@ -52,7 +52,7 @@ describe('eval invariants', () => {
   });
   test('viability none with a total above $0 fails', () => {
     const r = validRun();
-    r.config.triage = { ...r.config.triage, viability: 'none' };
+    r.triage = { ...r.triage, viability: 'none' };
     expect(inv(r)).toContain('none ⇒ $0 and no placements');
   });
   test('unverified creative fails when verification is expected', () => {

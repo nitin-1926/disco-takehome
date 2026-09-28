@@ -204,64 +204,49 @@ export interface Creative {
 
 export interface Placement {
   publisher_id: string;
-  rank: number;
-  score: number;
-  band: Band;
-  share: number;
+  /** exploit: a recommended publisher; explore: a weak fit whose budget buys outcome data. */
+  role: 'exploit' | 'explore';
   allocation_usd: number;
-  impressions_range: [number, number];
-  conversions_range: [number, number];
+  share: number;
+  /** Fixed CPA: allocation / CPA, if the publisher's inventory can deliver it. */
+  expected_conversions: number;
+  /** Share of the publisher's flight inventory those conversions need (delivery risk near 100). */
   inventory_used_pct: number;
-  cpa_usd: number;
   creative_ids: string[];
-  why: string;
 }
 
+/** The ad as the ad server needs it; reasoning and critic verdicts stay with the run. */
+export type ConfigCreative = Pick<Creative, 'id' | 'persona_id' | 'heading' | 'subheading' | 'cta' | 'offer' | 'disclosure'>;
+
 export interface CampaignConfig {
-  meta: { run_id: string; generated_at: string; pipeline_version: string; models: Record<string, string> };
-  advertiser_profile: AdvertiserProfile;
-  triage: Triage;
-  campaign: { name: string; objective: ConversionEvent; status: 'draft' };
+  meta: { run_id: string; generated_at: string; pipeline_version: string };
+  campaign: { name: string; objective: ConversionEvent; status: 'draft'; customer_type: 'new_only' };
   flight: { start: string; end: string; days: number; seasonality_note: string | null };
-  budget: { total_usd: number; daily_cap_usd: number; explore_share: number; planning_estimate: true; viability_factor: number };
+  budget: { total_usd: number; daily_cap_usd: number; explore_share: number; viability_factor: number };
   bidding: {
-    model: 'cpa_cpo' | 'cpc';
-    fixed_cpa_usd: number;
+    model: 'fixed_cpa';
+    cpa_usd: number;
     /** Starting bid range: the same price basis at the benchmark's low and high CPA share. */
     cpa_range_usd: [number, number];
-    fixed_cpo_usd: number;
     cpc_alternative: { min_usd: number; max_usd: number; optimization_target: 'roas' | 'cpa' } | null;
     basis: string;
   };
   targeting: {
-    customer_type: 'new_only' | 'new_and_returning';
-    primary_category: string;
+    category: string;
     subcategories: string[];
     personas: string[];
-    buyer_age: { low: number; high: number } | null;
-    buyer_gender: string;
-    income_tiers: string[];
+    age: { low: number; high: number } | null;
+    gender: string;
     geo: 'US';
   };
   placements: Placement[];
-  creatives: Creative[];
-  personas: PersonaScore[];
-  exclusions: {
-    publishers: { id: string; reason_group: string; reason: string }[];
-    personas: { id: string; reason: string }[];
-  };
-  constraints: string[];
-  measurement: {
-    primary_kpi: 'cpa';
-    target_cpa_usd: number;
-    target_roas: number;
-    expected_conversions_range: [number, number];
-    attribution: { click_days: 14; view_days: 14 };
-  };
-  launch_checklist: string[];
+  creatives: ConfigCreative[];
+  exclusions: { publishers: { id: string; reason: string }[] };
+  measurement: { kpi: 'cpa'; target_cpa_usd: number; expected_conversions: number; attribution_days: number };
   warnings: string[];
   assumptions: (Assumption & { source: string })[];
 }
+
 
 // ---- Run events + context ----
 

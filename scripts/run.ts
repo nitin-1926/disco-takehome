@@ -92,8 +92,8 @@ function printReport(r: PipelineResult) {
   }
   const cfg = r.config;
   if (cfg) {
-    console.log(`\nconfig: budget $${cfg.budget.total_usd} (factor ${cfg.budget.viability_factor}) bid ${cfg.bidding.model} CPA $${cfg.bidding.fixed_cpa_usd}${cfg.bidding.cpc_alternative ? ` | CPC alt $${cfg.bidding.cpc_alternative.min_usd}-${cfg.bidding.cpc_alternative.max_usd}` : ''} | flight ${cfg.flight.start}→${cfg.flight.end}`);
-    for (const pl of cfg.placements) console.log(`  ${name(pl.publisher_id).padEnd(18)} $${pl.allocation_usd} (${Math.round(pl.share * 100)}%) conv ${pl.conversions_range.join('-')} inv ${pl.inventory_used_pct}%`);
+    console.log(`\nconfig: budget $${cfg.budget.total_usd} (factor ${cfg.budget.viability_factor}) bid ${cfg.bidding.model} CPA $${cfg.bidding.cpa_usd}${cfg.bidding.cpc_alternative ? ` | CPC alt $${cfg.bidding.cpc_alternative.min_usd}-${cfg.bidding.cpc_alternative.max_usd}` : ''} | flight ${cfg.flight.start}→${cfg.flight.end}`);
+    for (const pl of cfg.placements) console.log(`  ${name(pl.publisher_id).padEnd(18)} $${pl.allocation_usd} (${Math.round(pl.share * 100)}%) conv ${pl.expected_conversions} inv ${pl.inventory_used_pct}%`);
     for (const w of cfg.warnings) console.log(`  warning: ${w}`);
   }
   const s = r.summary;

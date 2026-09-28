@@ -12,7 +12,7 @@ import { personaJudgments, profiles, publisherDims, type SampleId } from './fixt
 
 const pubs = publishers as Publisher[];
 const personas = personasJson as Persona[];
-const meta: CampaignConfig['meta'] = { run_id: 'test', generated_at: '2026-09-28T00:00:00Z', pipeline_version: 'u2', models: { sol: 'gpt-6-sol' } };
+const meta: CampaignConfig['meta'] = { run_id: 'test', generated_at: '2026-09-28T00:00:00Z', pipeline_version: 'u2' };
 const id = (name: string) => pubs.find((p) => p.name === name)!.id;
 
 function build(sample: SampleId, settings: Settings = normalizeSettings(), over: { triage?: Partial<Triage>; today?: string; creatives?: Creative[] } = {}) {
@@ -46,49 +46,46 @@ describe('#1 full assembly', () => {
   test('allocations sum to total_usd to the cent; 85/15 exploit-explore across recommended + weak', () => {
     expect(sum(c)).toBe(c.budget.total_usd);
     expect(c.budget.total_usd).toBe(10_000);
-    const rec = c.placements.filter((p) => p.band === 'recommended');
-    const weak = c.placements.filter((p) => p.band === 'weak');
+    const rec = c.placements.filter((p) => p.role === 'exploit');
+    const weak = c.placements.filter((p) => p.role === 'explore');
     expect(rec.length).toBeGreaterThanOrEqual(2);
     expect(weak.length).toBeGreaterThanOrEqual(1);
-    expect(rec.reduce((n, p) => n + p.share, 0)).toBeCloseTo(0.85, 6);
+    expect(rec.reduce((n, p) => n + p.share, 0)).toBeCloseTo(0.85, 2);
     expect(c.budget.explore_share).toBe(0.15);
     expect(c.placements[0].publisher_id).toBe(id('Pawline'));
     expect(c.placements[0].allocation_usd).toBeGreaterThan(c.placements[1].allocation_usd);
   });
   test('every guessed number has an assumptions entry with a source', () => {
     const fields = c.assumptions.map((a) => a.field);
-    for (const f of ['price', 'bidding.fixed_cpa_usd', 'cvr_prior', 'budget.viability_factor', 'budget.explore_share', 'subscription_ltv_mult']) {
+    for (const f of ['price', 'bidding.cpa_usd', 'measurement.attribution_days', 'cvr_prior', 'budget.viability_factor', 'budget.explore_share', 'subscription_ltv_mult']) {
       expect(fields).toContain(f);
     }
     for (const a of c.assumptions) expect(a.source.length).toBeGreaterThan(0);
   });
   test('measurement, bidding, targeting shapes', () => {
-    expect(c.bidding.fixed_cpa_usd).toBeCloseTo(31.5);
-    expect(c.bidding.fixed_cpo_usd).toBe(0);
-    expect(c.targeting.customer_type).toBe('new_only');
-    expect(c.measurement.target_cpa_usd).toBe(c.bidding.fixed_cpa_usd);
-    expect(c.measurement.target_roas).toBeCloseTo(70 / 31.5, 2);
-    expect(c.measurement.attribution).toEqual({ click_days: 14, view_days: 14 });
-    expect(c.measurement.expected_conversions_range[0]).toBeLessThanOrEqual(c.measurement.expected_conversions_range[1]);
+    expect(c.bidding.model).toBe('fixed_cpa');
+    expect(c.bidding.cpa_usd).toBeCloseTo(31.5);
+    expect(c.campaign.customer_type).toBe('new_only');
+    expect(c.measurement.target_cpa_usd).toBe(c.bidding.cpa_usd);
+    expect(c.measurement.attribution_days).toBe(14);
+    // Fixed CPA: conversions are dollars over the CPA, per placement and in total.
+    for (const p of c.placements) expect(p.expected_conversions).toBe(Math.round(p.allocation_usd / c.bidding.cpa_usd));
+    expect(c.measurement.expected_conversions).toBe(c.placements.reduce((n, p) => n + p.expected_conversions, 0));
     expect(c.campaign.objective).toBe('purchase');
     expect(c.flight.days).toBe(30);
     expect(c.budget.daily_cap_usd).toBeCloseTo(10_000 / 30, 2);
     expect(c.targeting.personas.length).toBeGreaterThanOrEqual(3);
     expect(c.targeting.geo).toBe('US');
   });
-  test('exclusions come from the scores and constraints from recommended publishers\' notes', () => {
+  test('exclusions come from the scores and say why; no excluded publisher is placed', () => {
     const daily = c.exclusions.publishers.find((e) => e.id === id('Daily Form'))!;
-    expect(daily.reason_group).toBe('not their category');
-    expect(c.placements.every((p) => p.band !== 'excluded')).toBe(true);
-    expect(c.exclusions.personas.length + c.personas.length).toBe(personas.length);
+    expect(daily.reason.startsWith('not their category:')).toBe(true);
+    const excluded = new Set(c.exclusions.publishers.map((e) => e.id));
+    expect(c.placements.every((p) => !excluded.has(p.publisher_id))).toBe(true);
   });
-  test('launch checklist covers landing URL, logo, images; promo code only with an offer', () => {
-    expect(c.launch_checklist.join(' ')).toMatch(/landing/i);
-    expect(c.launch_checklist.join(' ')).toMatch(/logo/i);
-    expect(c.launch_checklist.join(' ')).toMatch(/image/i);
-    expect(c.launch_checklist.join(' ')).not.toMatch(/promo/i);
-    const withOffer = build(1, normalizeSettings({ offer: { type: 'pct_off', amount: 10, code: 'SENIOR10' } }));
-    expect(withOffer.launch_checklist.join(' ')).toMatch(/SENIOR10/);
+  test('the config carries the plan, not the reasoning behind it', () => {
+    expect(Object.keys(c).sort()).toEqual(['assumptions', 'bidding', 'budget', 'campaign', 'creatives', 'exclusions', 'flight', 'measurement', 'meta', 'placements', 'targeting', 'warnings']);
+    expect(Object.keys(c.placements[0]).sort()).toEqual(['allocation_usd', 'creative_ids', 'expected_conversions', 'inventory_used_pct', 'publisher_id', 'role', 'share']);
   });
   test('creative ids attach to placements by publisher', () => {
     const cr: Creative = {
@@ -97,7 +94,9 @@ describe('#1 full assembly', () => {
     };
     const withCreative = build(1, normalizeSettings(), { creatives: [cr] });
     expect(withCreative.placements.find((p) => p.publisher_id === id('Pawline'))!.creative_ids).toEqual(['c1']);
-    expect(withCreative.placements.find((p) => p.publisher_id === id('Ruffco'))!.creative_ids).toEqual([]);
+    // Ruffco is not on this persona's list, so it rotates every ad rather than holding budget with nothing to run.
+    expect(withCreative.placements.find((p) => p.publisher_id === id('Ruffco'))!.creative_ids).toEqual(['c1']);
+    for (const p of withCreative.placements) expect(p.creative_ids.length).toBeGreaterThan(0);
   });
 });
 
@@ -134,13 +133,10 @@ describe('viability and budgets', () => {
   });
   test('budget $200 vs CPA $360 → placements kept, conversions within [0,1], warning', () => {
     const c = build(10, normalizeSettings({ budgetUsd: 200 }), { triage: { viability: 'strong' } });
-    expect(c.bidding.fixed_cpa_usd).toBe(360);
+    expect(c.bidding.cpa_usd).toBe(360);
     expect(c.placements.length).toBeGreaterThanOrEqual(2);
     expect(sum(c)).toBe(200);
-    for (const p of c.placements) {
-      expect(p.conversions_range[0]).toBeGreaterThanOrEqual(0);
-      expect(p.conversions_range[1]).toBeLessThanOrEqual(1);
-    }
+    for (const p of c.placements) expect(p.expected_conversions).toBeLessThanOrEqual(1);
     expect(c.warnings.join(' ')).toMatch(/below one target CPA|fewer than 50|below 50/i);
   });
   test('$500k → inventory cap binds and shares redistribute; sum still exact', () => {
@@ -148,10 +144,9 @@ describe('viability and budgets', () => {
     const heart = c.placements.find((p) => p.publisher_id === id('Heartfoot'))!;
     expect(heart.inventory_used_pct).toBe(100);
     expect(heart.share).toBeLessThan(0.85);
-    expect(c.placements.filter((p) => p.band === 'weak').reduce((n, p) => n + p.share, 0)).toBeGreaterThan(0.15);
+    expect(c.placements.filter((p) => p.role === 'explore').reduce((n, p) => n + p.share, 0)).toBeGreaterThan(0.15);
     expect(sum(c)).toBe(c.budget.total_usd);
-    expect(c.placements.reduce((n, p) => n + p.share, 0)).toBeCloseTo(1, 6);
-    expect(heart.conversions_range[0]).toBeLessThan(heart.conversions_range[1]);
+    expect(c.placements.reduce((n, p) => n + p.share, 0)).toBeCloseTo(1, 2);
   });
   test('caps binding over several rounds never strand budget: a cap warning only when every placement is full', () => {
     const samples: SampleId[] = [1, 4, 9, 13, 14];
@@ -172,7 +167,7 @@ describe('viability and budgets', () => {
     for (const sample of [1, 4, 9, 13, 14] as SampleId[]) {
       const c = build(sample);
       if (c.warnings.some((w) => w.startsWith('Inventory caps'))) continue;
-      const weak = c.placements.filter((p) => p.band === 'weak').reduce((n, p) => n + p.allocation_usd, 0);
+      const weak = c.placements.filter((p) => p.role === 'explore').reduce((n, p) => n + p.allocation_usd, 0);
       expect(c.budget.explore_share).toBe(weak > 0 ? 0.15 : 0);
     }
   });
@@ -194,13 +189,13 @@ describe('viability and budgets', () => {
     const publisherScores = scorePublishers(profile, pubs, publisherDims[6]).map((s, i) => (i < 6 ? { ...s, band: 'weak' as const, exclusion_group: null, score: 0.5 - i * 0.01 } : s));
     const c = buildConfig({ profile, triage: profile.triage, settings: normalizeSettings(), publisherScores, personaScores: [], creatives: [], publishers: pubs, meta, today: '2026-09-28' });
     expect(c.placements).toHaveLength(3);
-    expect(c.exclusions.publishers.filter((e) => e.reason_group === 'outside the 3 best weak fits')).toHaveLength(3);
+    expect(c.exclusions.publishers.filter((e) => e.reason.startsWith('outside the 3 best weak fits'))).toHaveLength(3);
   });
   test('a starting bid range brackets the fixed CPA', () => {
     const c = build(1);
     const [lo, hi] = c.bidding.cpa_range_usd;
-    expect(lo).toBeLessThan(c.bidding.fixed_cpa_usd);
-    expect(hi).toBeGreaterThan(c.bidding.fixed_cpa_usd);
+    expect(lo).toBeLessThan(c.bidding.cpa_usd);
+    expect(hi).toBeGreaterThan(c.bidding.cpa_usd);
   });
   test('#13 price-led advertiser gets a CPC alternative and its assumption', () => {
     const c = build(13);

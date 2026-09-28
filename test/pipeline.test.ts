@@ -175,7 +175,7 @@ describe('runPipeline (mocked LLM)', () => {
     const r = await runPipeline(input, normalizeSettings(), c);
     expect(r.creatives.filter((cr) => cr.error)).toHaveLength(1);
     expect(r.creatives.filter((cr) => !cr.error).length).toBe(r.creatives.length - 1);
-    expect(r.config!.creatives.every((cr) => !cr.error)).toBe(true);
+    expect(r.config!.creatives.map((cr) => cr.id)).toEqual(r.creatives.filter((cr) => !cr.error).map((cr) => cr.id));
     expect(errorsOf(c.events)).toMatchObject([{ stage: 'creative', code: 'timeout' }]);
   });
 

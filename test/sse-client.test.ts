@@ -63,9 +63,19 @@ describe('SSE parser + reducer', () => {
     let s = reduce(initialState(), { type: 'start', input: 'x' });
     const card = { id: 'c1', persona_id: 'persona_004', publisher_ids: [], critic: { pass: false, checks: [], unverified: true } };
     s = reduce(s, { type: 'event', id: 1, event: { type: 'stage', stage: 'creative', status: 'done', payload: { creatives: [card] } } } as Action);
-    s = reduce(s, { type: 'event', id: 2, event: { type: 'stage', stage: 'config', status: 'done', payload: { config: { creatives: [{ ...card, publisher_ids: ['pub_007'] }], personas: [] } } } } as Action);
+    s = reduce(s, { type: 'event', id: 2, event: { type: 'stage', stage: 'config', status: 'done', payload: { config: {}, creatives: [{ ...card, publisher_ids: ['pub_007'] }], personas: [] } } } as Action);
     expect(s.creatives[0].publisher_ids).toEqual(['pub_007']);
     expect(s.creatives[0].critic?.unverified).toBe(true);
+  });
+
+  test('a creative event arriving after the config keeps the mapping the config brought', () => {
+    let s = reduce(initialState(), { type: 'start', input: 'x' });
+    const card = { id: 'c1', persona_id: 'persona_004', publisher_ids: [], critic: null };
+    s = reduce(s, { type: 'event', id: 1, event: { type: 'stage', stage: 'creative', status: 'done', payload: { creatives: [card] } } } as Action);
+    s = reduce(s, { type: 'event', id: 3, event: { type: 'stage', stage: 'config', status: 'done', payload: { config: {}, creatives: [{ ...card, publisher_ids: ['pub_007'] }], personas: [] } } } as Action);
+    s = reduce(s, { type: 'event', id: 2, event: { type: 'stage', stage: 'critic', status: 'done', payload: { creatives: [{ ...card, critic: { pass: true, checks: [], unverified: false } }] } } } as Action);
+    expect(s.creatives[0].publisher_ids).toEqual(['pub_007']);
+    expect(s.creatives[0].critic?.pass).toBe(true);
   });
 
   test('HTTP errors before the stream land as a failed state with retry-after', () => {

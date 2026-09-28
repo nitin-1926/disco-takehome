@@ -139,7 +139,7 @@ function Row({ s, rank, placement, priceBasis, i }: { s: PublisherScore; rank: n
           <p className="text-xs text-ink-3">
             {priceBasis === 'assumed' ? 'Price was assumed, so its weight is halved. ' : ''}
             {s.retrieval_similarity !== null ? `Retrieval similarity ${s.retrieval_similarity.toFixed(3)}. ` : ''}
-            {placement ? `Planned ${usd(placement.allocation_usd)}, ${placement.conversions_range[0]}-${placement.conversions_range[1]} conversions, ${placement.inventory_used_pct}% of its inventory. ` : ''}
+            {placement ? `Planned ${usd(placement.allocation_usd)}, ${placement.expected_conversions} conversions, ${placement.inventory_used_pct}% of its inventory. ` : ''}
             Scored by prompts/score-publishers.ts and lib/funnel.ts.
           </p>
         </div>

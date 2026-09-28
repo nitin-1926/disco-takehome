@@ -6,7 +6,7 @@ import { env } from './env';
 import { groupExclusions, resolveViability, scorePublishers, WEIGHTS, type Weights } from './funnel';
 import { checkLimits, groundCreative } from './grounding';
 import { callLLM, LlmError, type CallOptions, type CallResult, type PromptModule } from './llm';
-import { CREATIVES_MAX, MODEL_IDS, PIPELINE_VERSION } from './models';
+import { CREATIVES_MAX, PIPELINE_VERSION } from './models';
 import { scorePersonas } from './personas';
 import { containsSpan, finalizeProfile, runMode, type RunMode } from './profile';
 import { normalizeInput } from './settings';
@@ -533,13 +533,13 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
         run_id: ctx.run_id,
         generated_at: new Date().toISOString(),
         pipeline_version: PIPELINE_VERSION,
-        models: { infer: MODEL_IDS.sol, check: MODEL_IDS.luna, embedding: MODEL_IDS.embedding },
       },
       today: opts.today ?? new Date().toISOString().slice(0, 10),
     });
     // Before the event is serialised: a warning added afterwards would never reach the page or the download.
     result.config.warnings.unshift(...leadWarnings);
-    emit({ type: 'stage', stage: 'config', status: 'done', source: 'code', ms: Date.now() - t0, payload: { config: result.config } });
+    // The final persona → publisher mapping rides beside the config (the page shows it), not inside it.
+    emit({ type: 'stage', stage: 'config', status: 'done', source: 'code', ms: Date.now() - t0, payload: { config: result.config, creatives: result.creatives, personas: result.personas } });
   }
 }
 

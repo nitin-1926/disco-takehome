@@ -3,6 +3,10 @@ import { money } from './fit';
 import { CPA_SHARE_BAND, CPA_SHARE_OF_PRICE, CVR_BAND, CVR_PRIOR, SIGNUP_CPA_USD, SUBSCRIPTION_LTV_MULT, cpcAlternative, effectiveCvr, priceMid, targetCpa } from './pricing';
 import type { AdvertiserProfile, CampaignConfig, Creative, PersonaScore, Placement, Publisher, PublisherScore, Settings, Triage, Viability } from './types';
 
+// The config is what a trafficker would load: campaign, flight, budget, bid, targeting, placements, the ads, exclusions,
+// measurement, plus warnings and every assumed number with its source. Scores, persona reasoning and critic verdicts
+// stay in the run itself (and the UI); they explain the plan but are not part of it.
+
 /** Budget factor per resolved viability (F6). The 0.4 is an assumption, recorded in assumptions[]. */
 export const VIABILITY_FACTOR: Record<Viability, number> = { strong: 1, weak: 0.4, none: 0 };
 export const EXPLORE_SHARE = 0.15;
@@ -13,7 +17,7 @@ export const MIN_EXPECTED_CONVERSIONS = 50;
 /** Shift the flight to Nov 1 only when it is this close; a January plan should not wait ten months. */
 export const SEASON_SHIFT_WINDOW_DAYS = 60;
 const SEASON_NOTE = /nov[-–]dec/i;
-const CONSTRAINT_NOTE = /skeptic|sensib|sensitiv|conservative|claims/i;
+export const ATTRIBUTION_DAYS = 14;
 
 export interface BuildConfigInput {
   profile: AdvertiserProfile;
@@ -43,7 +47,8 @@ interface Candidate {
   share: number;
   cap: number;
   impressions: number;
-  cvr: [number, number, number]; // low, mid, high
+  /** Expected conversions per impression (prior decayed by fit and price). */
+  cvr: number;
   allocation: number;
 }
 
@@ -138,9 +143,9 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
     items = [...exploit, ...explore].map((score) => {
       const pub = pubById.get(score.publisher_id)!;
       const impressions = (pub.monthly_impressions * days) / 30;
-      const cvr = [CVR_BAND[0], CVR_PRIOR, CVR_BAND[1]].map((prior) => effectiveCvr(prior, score.score, pub.avg_order_value_usd, price.value)) as Candidate['cvr'];
+      const cvr = effectiveCvr(CVR_PRIOR, score.score, pub.avg_order_value_usd, price.value);
       const pool = exploreIds.has(score.publisher_id) ? ('explore' as const) : ('exploit' as const);
-      return { score, pool, pub, share: shares.get(score.publisher_id)!, cap: impressions * cvr[1] * cpa, impressions, cvr, allocation: 0 };
+      return { score, pool, pub, share: shares.get(score.publisher_id)!, cap: impressions * cvr * cpa, impressions, cvr, allocation: 0 };
     });
     ({ kept: items, dropped } = dropSmall(items));
     const spendable = applyCaps(items, total);
@@ -154,30 +159,24 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
     total = 0;
   }
 
-  const placements: Placement[] = items.map((c, i) => {
+  // Fixed CPA: the advertiser pays per conversion, so a placement's conversions are its dollars over the CPA. The
+  // uncertainty is delivery (can the publisher's inventory produce them), which inventory_used_pct shows.
+  const placements: Placement[] = items.map((c) => {
     const conversions = c.allocation / cpa;
-    const lo = Math.min(conversions, c.impressions * c.cvr[0]);
-    const hi = Math.min(conversions, c.impressions * c.cvr[2]);
+    // A placement no picked persona shops on (usually explore) rotates every ad: learning which persona converts there
+    // is what its budget is for. Budget with no ad attached could not run.
+    const matched = creatives.filter((cr) => cr.publisher_ids.includes(c.pub.id)).map((cr) => cr.id);
     return {
       publisher_id: c.pub.id,
-      rank: i + 1,
-      score: c.score.score,
-      band: c.score.band,
-      share: total > 0 ? c.allocation / total : 0,
+      role: c.pool,
       allocation_usd: c.allocation,
-      impressions_range: [Math.round(Math.min(c.impressions, lo / c.cvr[2])), Math.round(Math.min(c.impressions, hi / c.cvr[0]))],
-      conversions_range: [Math.floor(lo), Math.ceil(hi)],
-      inventory_used_pct: Math.min(100, Math.round((conversions / c.cvr[1] / c.impressions) * 1000) / 10),
-      cpa_usd: cpa,
-      creative_ids: creatives.filter((cr) => cr.publisher_ids.includes(c.pub.id)).map((cr) => cr.id),
-      why: `${c.score.band}: ${c.score.reasons.category}`,
+      share: total > 0 ? round3(c.allocation / total) : 0,
+      expected_conversions: Math.round(conversions),
+      inventory_used_pct: Math.min(100, Math.round((conversions / c.cvr / c.impressions) * 1000) / 10),
+      creative_ids: matched.length ? matched : creatives.map((cr) => cr.id),
     };
   });
   const expectedMid = placements.reduce((n, p) => n + p.allocation_usd / cpa, 0);
-  const conversionsRange: [number, number] = [
-    placements.reduce((n, p) => n + p.conversions_range[0], 0),
-    placements.reduce((n, p) => n + p.conversions_range[1], 0),
-  ];
   if (total > 0 && total < cpa) warnings.push(`Budget ${money(total)} is below one target CPA (${money(cpa)}): expect at most one conversion.`);
   else if (total > 0 && expectedMid < MIN_EXPECTED_CONVERSIONS) warnings.push(`Expected conversions (~${Math.round(expectedMid)}) below ${MIN_EXPECTED_CONVERSIONS}: too few to optimise against; raise budget or extend the flight.`);
 
@@ -199,7 +198,7 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
 
   // ---- assumptions for every guessed number ----
   assumptions.push(
-    { field: 'bidding.fixed_cpa_usd', value: money(cpa), why: basis, source: `TGM DTC benchmark: CPA ${CPA_SHARE_BAND.map((b) => `${b * 100}%`).join('-')} of first-order AOV (using ${CPA_SHARE_OF_PRICE * 100}%)` },
+    { field: 'bidding.cpa_usd', value: money(cpa), why: basis, source: `TGM DTC benchmark: CPA ${CPA_SHARE_BAND.map((b) => `${b * 100}%`).join('-')} of first-order AOV (using ${CPA_SHARE_OF_PRICE * 100}%)` },
     { field: 'cvr_prior', value: `${CVR_PRIOR * 100}% (band ${CVR_BAND[0] * 100}-${CVR_BAND[1] * 100}%)`, why: 'post-checkout conversions per impression, decayed by fit and AOV/price', source: 'derived from Rokt publisher yield $0.30-0.80 per transaction, capped by 5.6% engagement' },
     { field: 'budget.viability_factor', value: String(factor), why: `viability ${triage.viability}: ${triage.reason}`, source: 'assumption' },
     { field: 'budget.explore_share', value: `${EXPLORE_SHARE * 100}% target`, why: 'explore budget buys publisher × persona outcome data that replaces the model prior', source: 'allocation thesis' },
@@ -217,7 +216,9 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
     assumptions.push({ field: 'bidding.cpc_alternative', value: `${money(cpc.min_usd)}-${money(cpc.max_usd)}`, why: 'advertiser competes on price; CPC = CPA × 2-5% click-to-purchase', source: 'assumption (Disco CPC model, public help center)' });
   }
 
-  // ---- personas, exclusions, constraints ----
+  assumptions.push({ field: 'measurement.attribution_days', value: String(ATTRIBUTION_DAYS), why: 'common DTC click window for a post-purchase offer', source: 'assumption; match the advertiser\'s own attribution before launch' });
+
+  // ---- targeting and exclusions ----
   const picked = personaScores.filter((p) => p.picked);
   const groupReason: Record<string, keyof PublisherScore['reasons']> = { 'not their category': 'category', 'audience mismatch': 'audience', 'price mismatch': 'price', 'tone mismatch': 'tone' };
   const placed = new Set(placements.map((p) => p.publisher_id));
@@ -228,63 +229,35 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
 
   return {
     meta,
-    advertiser_profile: profile,
-    triage,
-    campaign: { name: `${profile.product} — ${settings.conversionEvent}`, objective: settings.conversionEvent, status: 'draft' },
+    campaign: { name: `${profile.product}: ${settings.conversionEvent}`, objective: settings.conversionEvent, status: 'draft', customer_type: 'new_only' },
     flight: { start, end: addDays(start, days - 1), days, seasonality_note: seasonalityNote },
     budget: {
       total_usd: total,
       daily_cap_usd: total > 0 ? round2(total / days) : 0,
       // Realised, not the target: inventory caps can move money between the pools.
       explore_share: total > 0 ? round3(items.filter((c) => c.pool === 'explore').reduce((n, c) => n + c.allocation, 0) / total) : 0,
-      planning_estimate: true,
       viability_factor: factor,
     },
-    bidding: { model: 'cpa_cpo', fixed_cpa_usd: cpa, cpa_range_usd: CPA_SHARE_BAND.map((b) => round2((cpa * b) / CPA_SHARE_OF_PRICE)) as [number, number], fixed_cpo_usd: 0, cpc_alternative: cpc, basis },
+    bidding: { model: 'fixed_cpa', cpa_usd: cpa, cpa_range_usd: CPA_SHARE_BAND.map((b) => round2((cpa * b) / CPA_SHARE_OF_PRICE)) as [number, number], cpc_alternative: cpc, basis },
     targeting: {
-      customer_type: 'new_only',
-      primary_category: profile.primary_category,
+      category: profile.primary_category,
       subcategories: profile.subcategories,
       personas: picked.map((p) => p.persona_id),
-      buyer_age: profile.buyer_age,
-      buyer_gender: profile.buyer_gender,
-      income_tiers: [...new Set(items.map((c) => c.pub.audience.income_tier))],
+      age: profile.buyer_age,
+      gender: profile.buyer_gender,
       geo: 'US',
     },
     placements,
-    creatives,
-    personas: picked,
+    creatives: creatives.map((c) => ({ id: c.id, persona_id: c.persona_id, heading: c.heading, subheading: c.subheading, cta: c.cta, offer: c.offer, disclosure: c.disclosure })),
     exclusions: {
       publishers: publisherScores
         .filter((s) => s.band === 'excluded' || (!placed.has(s.publisher_id) && total > 0))
         .map((s) => ({
           id: s.publisher_id,
-          reason_group: s.exclusion_group ?? unplacedReason(s),
-          reason: s.exclusion_group ? s.reasons[groupReason[s.exclusion_group]] : `score ${Math.round(s.score * 100)}/100 (${s.band})`,
-        })),
-      personas: personaScores
-        .filter((p) => !p.picked)
-        .map((p) => ({
-          id: p.persona_id,
-          reason: p.conflicts.length
-            ? `conflicts with input: "${p.conflicts[0].input_quote}" vs ${p.conflicts[0].field} "${p.conflicts[0].persona_value}"`
-            : `score ${p.score.toFixed(2)} (${p.label}); not selected`,
+          reason: s.exclusion_group ? `${s.exclusion_group}: ${s.reasons[groupReason[s.exclusion_group]]}` : `${unplacedReason(s)}: score ${Math.round(s.score * 100)}/100`,
         })),
     },
-    constraints: items.filter((c) => CONSTRAINT_NOTE.test(c.pub.notes)).map((c) => `${c.pub.name}: ${c.pub.notes}`),
-    measurement: {
-      primary_kpi: 'cpa',
-      target_cpa_usd: cpa,
-      target_roas: round2(price.value / cpa),
-      expected_conversions_range: conversionsRange,
-      attribution: { click_days: 14, view_days: 14 },
-    },
-    launch_checklist: [
-      'Landing page URL',
-      'Brand logo (SVG or PNG)',
-      'Product images',
-      ...(settings.offer ? [`Promo code${settings.offer.code ? ` ${settings.offer.code}` : ''} live at checkout`] : []),
-    ],
+    measurement: { kpi: 'cpa', target_cpa_usd: cpa, expected_conversions: placements.reduce((n, p) => n + p.expected_conversions, 0), attribution_days: ATTRIBUTION_DAYS },
     warnings,
     assumptions,
   };

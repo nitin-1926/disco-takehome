@@ -90,10 +90,11 @@ export function invariants(r: Checkable & { mode: string | null }, catalog: { pu
     out.push(ok('allocations sum to total', Math.abs(sum - cfg.budget.total_usd) < 0.005, `sum ${sum} vs total ${cfg.budget.total_usd}`));
     const cap = Math.round(opts.budgetUsd * cfg.budget.viability_factor * 100) / 100;
     out.push(ok('total within budget × viability factor', cfg.budget.total_usd >= 0 && cfg.budget.total_usd <= cap + 0.005, `$${cfg.budget.total_usd} vs cap $${cap}`));
-    if (cfg.triage.viability === 'none' || cfg.triage.policy_banned) {
+    if (r.triage?.viability === 'none' || r.profile?.triage.policy_banned) {
       out.push(ok('none ⇒ $0 and no placements', cfg.budget.total_usd === 0 && cfg.placements.length === 0, `$${cfg.budget.total_usd}, ${cfg.placements.length} placements`));
     }
     out.push(ok('placements reference catalog ids', cfg.placements.every((p) => pubs.has(p.publisher_id)), ''));
+    if (cfg.creatives.length) out.push(ok('every placement has an ad to run', cfg.placements.every((p) => p.creative_ids.length > 0), cfg.placements.filter((p) => !p.creative_ids.length).map((p) => p.publisher_id).join(',')));
   }
   const viable = r.mode === 'full' || (r.triage?.viability && r.triage.viability !== 'none' && r.personas);
   const shipped = r.creatives.filter((c) => !c.error);

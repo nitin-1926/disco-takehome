@@ -78,7 +78,7 @@ describe('priceFit', () => {
     const linden = byName('Linden Park');
     const r = priceFit({ low: 1200, high: 1200, basis: 'stated' }, linden);
     expect(r.fit).toBeGreaterThan(0.3);
-    expect(r.reason).toBe("$1,200 is 9.4x Linden Park's $128 AOV; high-income audience softens the penalty");
+    expect(r.reason).toBe("Your $1,200 order is 9.4x what Linden Park's shoppers usually spend ($128); a high-income audience softens that");
   });
   test('uses the price range midpoint', () => {
     const tail = byName('Tailcrate');
@@ -101,7 +101,7 @@ describe('audienceFit', () => {
     const marlowe = audienceFit(p, byName('Marlowe & Co.'));
     const swift = audienceFit(p, byName('Swiftcart'));
     expect(marlowe.fit).toBeGreaterThan(swift.fit);
-    expect(marlowe.reason).toContain('96% female');
+    expect(marlowe.reason).toContain('96% of their shoppers are women');
   });
   test('age overlap is quoted with real numbers', () => {
     const p = { ...profiles[14], buyer_age: { low: 30, high: 50 } };

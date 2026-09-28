@@ -11,6 +11,7 @@ const base: UnderstandOutput = {
   is_subscription: true,
   buyer_age: null,
   buyer_gender: 'unspecified',
+  buyer_basis: 'assumed',
   values: ['health', 'longevity'],
   tone: 'caring, expert',
   facts: [

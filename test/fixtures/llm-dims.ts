@@ -17,6 +17,7 @@ function profile(p: Partial<AdvertiserProfile> & Pick<AdvertiserProfile, 'input'
     is_subscription: false,
     buyer_age: null,
     buyer_gender: 'unspecified',
+    buyer_basis: 'assumed',
     values: [],
     tone: '',
     facts: [],

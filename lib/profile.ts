@@ -41,6 +41,7 @@ export function finalizeProfile(raw: UnderstandOutput, input: string): Advertise
     is_subscription: raw.is_subscription,
     buyer_age: raw.buyer_age && raw.buyer_age.low > 0 && raw.buyer_age.high >= raw.buyer_age.low ? raw.buyer_age : null,
     buyer_gender: raw.buyer_gender,
+    buyer_basis: raw.buyer_basis,
     values: raw.values,
     tone: raw.tone,
     facts,

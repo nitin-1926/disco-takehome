@@ -92,6 +92,8 @@ export interface AdvertiserProfile {
   is_subscription: boolean;
   buyer_age: { low: number; high: number } | null;
   buyer_gender: 'female' | 'male' | 'balanced' | 'unspecified';
+  /** stated = the input names or implies who buys; assumed = the model's estimate from the product (same idea as price.basis). */
+  buyer_basis: 'stated' | 'assumed';
   values: string[];
   tone: string;
   facts: Fact[];

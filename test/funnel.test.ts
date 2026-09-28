@@ -163,6 +163,14 @@ describe('red flags cap a publisher at weak (F28)', () => {
     expect(s.capped_by).toBe('tone fit 2/5');
   });
 
+  test('an audience that is not the buyer caps at weak: a men\'s product on a 96%-women publisher', () => {
+    const mens: AdvertiserProfile = { ...profiles[1], buyer_gender: 'male', buyer_basis: 'stated', price: { low: 100, high: 100, basis: 'stated' } };
+    const s = scorePublishers(mens, pubs, [{ publisher_id: id('Marlowe & Co.'), category_fit: 4, tone_fit: 5, reason: 'x' }])[0];
+    expect(s.audience_fit).toBeLessThan(THRESHOLDS.audience_min);
+    expect(s.band).not.toBe('recommended');
+    expect(s.capped_by ?? s.exclusion_group).toMatch(/shoppers are not who you sell to|audience/);
+  });
+
   test('no red flag → recommended as before', () => {
     const s = scorePublishers(profiles[1], pubs, [{ publisher_id: id('Pawline'), category_fit: 5, tone_fit: 5, reason: 'x' }])[0];
     expect(s.band).toBe('recommended');

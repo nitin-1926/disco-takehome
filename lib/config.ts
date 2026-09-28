@@ -208,6 +208,9 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
   if (settings.conversionEvent === 'signup') {
     assumptions.push({ field: 'signup_cpa_usd', value: money(SIGNUP_CPA_USD), why: 'flat lead-gen CPA for a signup', source: 'assumption' });
   }
+  if (profile.buyer_basis === 'assumed' && profile.buyer_age) {
+    assumptions.push({ field: 'targeting.age', value: `${profile.buyer_age.low}-${profile.buyer_age.high}, ${profile.buyer_gender}`, why: 'no buyer stated; the typical buyer was estimated from the product', source: 'model estimate (understand)' });
+  }
   if (price.basis === 'tier_default') {
     assumptions.push({ field: 'price', value: money(price.value), why: `no price stated; ${profile.price_tier}-tier default used for CPA and ROAS`, source: 'assumption (pricing.ts TIER_PRICE_USD)' });
   }

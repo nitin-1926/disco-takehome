@@ -24,9 +24,11 @@ export interface Thresholds {
   tone_min: number;
   /** Applies to stated prices only: price_fit 0.5 ≈ price within 2x the publisher's AOV (3x for high-income audiences). */
   price_min: number;
+  /** audience_fit is age × gender × income: 0.2 is a 96%-women audience for a men's product, or a two-tier income gap. */
+  audience_min: number;
   near_miss: number;
 }
-export const THRESHOLDS: Thresholds = { recommended: 0.55, weak: 0.35, category_min: 3, tone_min: 3, price_min: 0.5, near_miss: 0.1 };
+export const THRESHOLDS: Thresholds = { recommended: 0.55, weak: 0.35, category_min: 3, tone_min: 3, price_min: 0.5, audience_min: 0.2, near_miss: 0.1 };
 
 const GROUPS = { category: 'not their category', audience: 'audience mismatch', price: 'price mismatch', tone: 'tone mismatch' } as const;
 
@@ -38,9 +40,10 @@ export function effectiveWeights(base: Weights, priceBasis: 'stated' | 'assumed'
 }
 
 /** The red flag that keeps a publisher out of the recommended band, if any. */
-function redFlag(categoryFit: number, toneFit: number, priceFit: number, priceStated: boolean, t: Thresholds): string | null {
+function redFlag(categoryFit: number, toneFit: number, audienceFit: number, priceFit: number, priceStated: boolean, t: Thresholds): string | null {
   if (categoryFit < t.category_min) return `category fit ${categoryFit}/5`;
   if (toneFit < t.tone_min) return `tone fit ${toneFit}/5`;
+  if (audienceFit < t.audience_min) return 'their shoppers are not who you sell to';
   if (priceStated && priceFit < t.price_min) return 'price far above this audience\'s order value';
   return null;
 }
@@ -77,7 +80,7 @@ export function scorePublishers(
     const gate = GATE[dims.category_fit] ?? 0;
     const tone = dims.tone_fit / 5;
     const score = gate * (w.tone * tone + w.audience * audience.fit + w.price * price.fit);
-    const flag = redFlag(dims.category_fit, dims.tone_fit, price.fit, profile.price?.basis === 'stated', thresholds);
+    const flag = redFlag(dims.category_fit, dims.tone_fit, audience.fit, price.fit, profile.price?.basis === 'stated', thresholds);
     const b = band(score, flag, thresholds);
     scores.push({
       publisher_id: pub.id,

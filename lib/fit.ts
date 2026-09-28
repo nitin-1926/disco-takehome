@@ -13,7 +13,7 @@ export const PRICE_FIT_NEUTRAL = 0.7;
 /** High-income audiences recover this share of the gap between the floor fit and 1. */
 const HIGH_INCOME_SOFTEN = 0.25;
 /** age_skew is a skew, not a bound: zero overlap still leaves some buyers. */
-const AGE_SOFT_FLOOR = 0.4;
+export const AGE_SOFT_FLOOR = 0.4;
 
 const PRICE_TIER_IDX: Record<AdvertiserProfile['price_tier'], number> = { budget: 0, mid: 1, premium: 2, luxury: 3 };
 const INCOME_IDX: Record<string, number> = { low: 0, mid: 1, 'mid-high': 2, high: 3 };
@@ -67,28 +67,30 @@ export function audienceFit(profile: AdvertiserProfile, pub: Publisher): { fit: 
   const age = AGE_SOFT_FLOOR + (1 - AGE_SOFT_FLOOR) * overlap;
   const gender = genderFit(profile.buyer_gender, audience.gender_split.female, audience.gender_split.male);
   const income = incomeFit(profile.price_tier, audience.income_tier);
+  // Plain words, only the parts that cost something: this line is what an advertiser reads under an exclusion.
   const parts = [
-    profile.buyer_age
-      ? `ages ${profile.buyer_age.low}-${profile.buyer_age.high} vs ${audience.age_skew} (${Math.round(overlap * 100)}% overlap)`
-      : 'no buyer age given',
-    profile.buyer_gender === 'female' || profile.buyer_gender === 'male'
-      ? `${Math.round(gender * 100)}% ${profile.buyer_gender} audience`
-      : 'gender-neutral',
-    `${audience.income_tier} income vs ${profile.price_tier} price tier`,
-  ];
-  return { fit: age * gender * income, reason: parts.join('; ') };
+    profile.buyer_age && overlap < 1
+      ? `their shoppers are ${audience.age_skew}, your buyers ${profile.buyer_age.low}-${profile.buyer_age.high} (${Math.round(overlap * 100)}% overlap)`
+      : null,
+    profile.buyer_gender === 'female' || profile.buyer_gender === 'male' ? `${Math.round(gender * 100)}% of their shoppers are ${profile.buyer_gender === 'female' ? 'women' : 'men'}` : null,
+    income < 1 ? `${audience.income_tier}-income shoppers for a ${profile.price_tier}-priced product` : null,
+  ].filter((x): x is string => x !== null);
+  const reason = parts.length
+    ? parts.join('; ').replace(/^./, (c) => c.toUpperCase())
+    : `Their shoppers (${audience.age_skew}, ${audience.income_tier} income) match on age, gender and income`;
+  return { fit: age * gender * income, reason };
 }
 
 /** Asymmetric: at or under AOV is a full fit; above decays as 1/ratio to a floor, softened for high-income audiences. */
 export function priceFit(price: Price, pub: Publisher): { fit: number; reason: string } {
-  if (!price) return { fit: PRICE_FIT_NEUTRAL, reason: 'no price given; neutral price fit' };
+  if (!price) return { fit: PRICE_FIT_NEUTRAL, reason: 'No price given, so price is scored as neutral' };
   const mid = priceMidpoint(price);
   const aov = pub.avg_order_value_usd;
   const ratio = mid / aov;
-  if (ratio <= 1) return { fit: 1, reason: `${money(mid)} is within ${pub.name}'s ${money(aov)} AOV` };
+  if (ratio <= 1) return { fit: 1, reason: `Your ${money(mid)} order is within what ${pub.name}'s shoppers usually spend (${money(aov)})` };
   let fit = Math.max(PRICE_FIT_FLOOR, 1 / ratio);
   const high = pub.audience.income_tier === 'high';
   if (high) fit += (1 - fit) * HIGH_INCOME_SOFTEN;
-  const reason = `${money(mid)} is ${ratio.toFixed(1)}x ${pub.name}'s ${money(aov)} AOV${high ? '; high-income audience softens the penalty' : ''}`;
+  const reason = `Your ${money(mid)} order is ${ratio.toFixed(1)}x what ${pub.name}'s shoppers usually spend (${money(aov)})${high ? '; a high-income audience softens that' : ''}`;
   return { fit, reason };
 }

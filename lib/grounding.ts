@@ -13,20 +13,25 @@ const DISCOUNT_WORDS: { re: RegExp; allowedFor: Offer['type'][] }[] = [
 const CLAIM_WORDS = /\b(clinically|proven|guaranteed|best)\b|#1/gi;
 const MONEY = /\$\s?\d[\d,]*(?:\.\d+)?/g;
 const PERCENT = /\d+(?:\.\d+)?\s?%/g;
-const BARE_NUMBER = /(?<![\d.,$#])\d+(?:\.\d+)?(?![\d.,]*%)/g;
+// Thousands-grouped numbers first ("10,000" is one number, not "10").
+const BARE_NUMBER = /(?<![\d.,$#])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.,]*%)/g;
 
 const toNumber = (s: string) => Number(s.replace(/[$,%\s]/g, ''));
 
 type Grounded = Pick<Creative, 'heading' | 'subheading' | 'cta' | 'claims_used' | 'disclosure'>;
 
-export function validateClaims(creative: Pick<Creative, 'claims_used'>, facts: Fact[]): string[] {
+/** Fact ids, plus "offer" when there is one (the creative prompt asks the model to cite it that way). */
+export function validateClaims(creative: Pick<Creative, 'claims_used'>, facts: Fact[], offer: Offer | null = null): string[] {
   const ids = new Set(facts.map((f) => f.id));
+  if (offer) ids.add('offer');
   return creative.claims_used.filter((id) => !ids.has(id)).map((id) => `claims_used references unknown fact "${id}"`);
 }
 
 /** Numbers, percentages, dollar amounts, discount words and claim words that neither the facts nor the offer justify. */
-export function regexFlags(text: string, facts: Fact[], offer: Offer | null): string[] {
+export function regexFlags(rawText: string, facts: Fact[], offer: Offer | null): string[] {
   const flags: string[] = [];
+  // The promo code is quoted verbatim; its digits ("WELCOME15") are not a claim.
+  const text = offer?.code ? rawText.split(offer.code).join(' ') : rawText;
   const factText = facts.map((f) => f.text).join('\n').toLowerCase();
   const knownNumbers = new Set<number>();
   for (const m of factText.match(/\d[\d,]*(?:\.\d+)?/g) ?? []) knownNumbers.add(toNumber(m));
@@ -59,6 +64,6 @@ export function checkLimits(creative: Pick<Creative, 'heading' | 'subheading' | 
 
 export function groundCreative(creative: Grounded, facts: Fact[], offer: Offer | null): { ok: boolean; flags: string[] } {
   const text = [creative.heading, creative.subheading, creative.disclosure ?? ''].join('\n');
-  const flags = [...validateClaims(creative, facts), ...regexFlags(text, facts, offer), ...checkLimits(creative)];
+  const flags = [...validateClaims(creative, facts, offer), ...regexFlags(text, facts, offer), ...checkLimits(creative)];
   return { ok: flags.length === 0, flags };
 }

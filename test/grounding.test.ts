@@ -21,6 +21,11 @@ describe('validateClaims', () => {
     expect(validateClaims(creative({ claims_used: ['f1', 'f2'] }), facts)).toEqual([]);
     expect(validateClaims(creative({ claims_used: ['f9'] }), facts)[0]).toContain('f9');
   });
+  test('"offer" is a valid claim only when an offer exists (the creative prompt asks for it)', () => {
+    const offer: Offer = { type: 'pct_off', amount: 15, code: null };
+    expect(validateClaims(creative({ claims_used: ['f1', 'offer'] }), facts, offer)).toEqual([]);
+    expect(validateClaims(creative({ claims_used: ['f1', 'offer'] }), facts, null)[0]).toContain('offer');
+  });
 });
 
 describe('regexFlags', () => {
@@ -35,6 +40,12 @@ describe('regexFlags', () => {
     const offer: Offer = { type: 'pct_off', amount: 20, code: 'FLORENCE20' };
     const f = [...facts, { id: 'f4', text: 'clinically proven' }];
     expect(regexFlags('Clinically proven. 20% off with FLORENCE20.', f, offer)).toEqual([]);
+  });
+  test('a thousands-grouped number is one number; promo code digits are not a claim', () => {
+    const f: Fact[] = [{ id: 'f1', text: 'Trusted by 10,000 dog owners' }];
+    expect(regexFlags('Join 10,000 dog owners.', f, null)).toEqual([]);
+    expect(regexFlags('Join 12,000 dog owners.', f, null).some((x) => x.includes('12,000'))).toBe(true);
+    expect(regexFlags('20% off with code WELCOME15.', f, { type: 'pct_off', amount: 20, code: 'WELCOME15' })).toEqual([]);
   });
   test('numbers in facts pass; numbers not in facts flag; dollar amounts normalised', () => {
     expect(regexFlags('Ships in 6 weeks. From $1200.', facts, null)).toEqual([]);

@@ -58,6 +58,10 @@ describe('finalizeProfile', () => {
     const flagged = { ...base, triage: { ...base.triage, policy_banned: true } };
     expect(finalizeProfile(flagged, 'Non-alcoholic sparkling drink, a cocktail alternative').triage.policy_banned).toBe(false);
     expect(finalizeProfile(flagged, 'Premium nicotine pouches').triage.policy_banned).toBe(true);
+    for (const input of ['Disposable vapes, fruit flavours', 'Handguns and rifles for home defense', 'Cannabis gummies, 10mg', 'E-cigarettes and pods', 'Prescriptions delivered in a day', 'Compounded semaglutide shots', 'Premium cigarettes']) {
+      expect(finalizeProfile(flagged, input).triage.policy_banned, input).toBe(true);
+    }
+    expect(finalizeProfile(flagged, 'Chef knives forged in Seki').triage.policy_banned).toBe(false);
   });
 
   test('nonsense price or age ranges become null', () => {

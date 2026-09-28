@@ -3,7 +3,11 @@ import type { UnderstandOutput } from '../prompts/understand';
 
 // Code checks on the understand output. Pure, so the CLI, pipeline and tests share them.
 
-const POLICY_KEYWORDS = /\b(firearm|firearms|gun|guns|ammunition|ammo|prescription|rx-only|nicotine|vape|vaping|e-cigarette|thc)\b/i;
+// The categories the understand prompt bans (weapons, prescription drugs, nicotine and vaping, cannabis), with the
+// plurals and everyday names people actually type. It only confirms the model's flag, so a broad word costs nothing
+// unless the model also calls the input banned.
+const POLICY_KEYWORDS =
+  /\b(?:firearms?|(?:hand|shot)?guns?|rifles?|pistols?|revolvers?|ammo|ammunition|weapons?|prescriptions?|rx(?:-only)?|semaglutide|tirzepatide|ozempic|wegovy|glp-?1|nicotine|vapes?|vaping|vapou?rs?|e-?cigs?|e-?cigarettes?|e-?liquids?|cigarettes?|cigars?|tobacco|cannabis|marijuana|weed|thc|delta-?[89])\b/i;
 
 export function containsSpan(input: string, quote: string): boolean {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();

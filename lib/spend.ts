@@ -125,19 +125,22 @@ export function _setStoreForTests(s: SpendStore | null | undefined): void {
   healthy = null;
 }
 
-let healthy: { ok: boolean; at: number } | null = null;
+let healthy: { ok: boolean; at: number; rttMs: number } | null = null;
+/** Round trip of the last health probe from this instance (the ledger records it). */
+export const lastProbeRttMs = () => healthy?.rttMs ?? null;
 const HEALTH_TTL_MS = 60_000;
 /** Startup increment probe, cached per instance for a minute. */
 export async function storeHealthy(s: SpendStore | null = spendStore()): Promise<boolean> {
   if (!s) return false;
   if (healthy && Date.now() - healthy.at < HEALTH_TTL_MS) return healthy.ok;
   let ok = false;
+  const t0 = Date.now();
   try {
     ok = await s.ping();
   } catch (e) {
     console.error('[spend] store probe failed', (e as Error).message);
   }
-  healthy = { ok, at: Date.now() };
+  healthy = { ok, at: Date.now(), rttMs: Date.now() - t0 };
   return ok;
 }
 

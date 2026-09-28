@@ -4,7 +4,7 @@ import { isCommittedInput } from '@/lib/cache';
 import { env } from '@/lib/env';
 import { RUN_WALL_MS, runPipeline } from '@/lib/pipeline';
 import { BUDGET_MAX_USD, DURATION_MAX_DAYS, INPUT_MAX_CHARS, isCanonical, normalizeInput, normalizeSettings } from '@/lib/settings';
-import { clientBucket, ledgerKey, runWorstCaseUsd, spendHook, spendKey, spendStore, storeHealthy, toMicro } from '@/lib/spend';
+import { clientBucket, lastProbeRttMs, ledgerKey, runWorstCaseUsd, spendHook, spendKey, spendStore, storeHealthy, toMicro } from '@/lib/spend';
 import type { RunContext, RunEvent } from '@/lib/types';
 
 // POST /api/run → text/event-stream. Gates return JSON before any stream byte: 400 body, 403 origin, 503 key/store,
@@ -165,6 +165,7 @@ export async function POST(req: Request): Promise<Response> {
             total_ms: r.summary.total_ms,
             errors: r.summary.errors,
             aborted: abort.signal.aborted,
+            store_rtt_ms: lastProbeRttMs(),
           };
         }
       } catch (err) {

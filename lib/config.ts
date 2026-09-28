@@ -36,6 +36,7 @@ export interface BuildConfigInput {
 const DAY_MS = 86_400_000;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
+const cents = (n: number) => `$${n.toFixed(2)}`;
 const parseDay = (s: string) => Date.UTC(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)));
 const formatDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const addDays = (day: string, n: number) => formatDay(parseDay(day) + n * DAY_MS);
@@ -196,13 +197,11 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
     }
   }
 
-  // ---- assumptions for every guessed number ----
-  assumptions.push(
-    { field: 'bidding.cpa_usd', value: money(cpa), why: basis, source: `TGM DTC benchmark: CPA ${CPA_SHARE_BAND.map((b) => `${b * 100}%`).join('-')} of first-order AOV (using ${CPA_SHARE_OF_PRICE * 100}%)` },
-    { field: 'cvr_prior', value: `${CVR_PRIOR * 100}% (band ${CVR_BAND[0] * 100}-${CVR_BAND[1] * 100}%)`, why: 'post-checkout conversions per impression, decayed by fit and AOV/price', source: 'derived from Rokt publisher yield $0.30-0.80 per transaction, capped by 5.6% engagement' },
-    { field: 'budget.viability_factor', value: String(factor), why: `viability ${triage.viability}: ${triage.reason}`, source: 'assumption' },
-    { field: 'budget.explore_share', value: `${EXPLORE_SHARE * 100}% target`, why: 'explore budget buys publisher × persona outcome data that replaces the model prior', source: 'allocation thesis' },
-  );
+  // ---- assumptions for every guessed number (only the ones this plan actually uses) ----
+  assumptions.push({ field: 'bidding.cpa_usd', value: cents(cpa), why: basis, source: `TGM DTC benchmark: CPA ${CPA_SHARE_BAND.map((b) => `${b * 100}%`).join('-')} of first-order AOV (using ${CPA_SHARE_OF_PRICE * 100}%)` }, { field: 'budget.viability_factor', value: String(factor), why: `viability ${triage.viability}: ${triage.reason}`, source: 'assumption' });
+  if (items.length) assumptions.push({ field: 'cvr_prior', value: `${CVR_PRIOR * 100}% (band ${CVR_BAND[0] * 100}-${CVR_BAND[1] * 100}%)`, why: 'post-checkout conversions per impression, decayed by fit and AOV/price', source: 'derived from Rokt publisher yield $0.30-0.80 per transaction, capped by 5.6% engagement' });
+  if (items.some((c) => c.pool === 'explore')) assumptions.push({ field: 'budget.explore_share', value: `${EXPLORE_SHARE * 100}% target`, why: 'explore budget buys publisher × persona outcome data that replaces the model prior', source: 'allocation thesis' });
+
   if (profile.is_subscription || settings.conversionEvent === 'subscription') {
     assumptions.push({ field: 'subscription_ltv_mult', value: `${SUBSCRIPTION_LTV_MULT}x`, why: 'recurring revenue justifies a higher first-order CPA', source: 'assumption' });
   }
@@ -213,7 +212,7 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
     assumptions.push({ field: 'price', value: money(price.value), why: `no price stated; ${profile.price_tier}-tier default used for CPA and ROAS`, source: 'assumption (pricing.ts TIER_PRICE_USD)' });
   }
   if (cpc) {
-    assumptions.push({ field: 'bidding.cpc_alternative', value: `${money(cpc.min_usd)}-${money(cpc.max_usd)}`, why: 'advertiser competes on price; CPC = CPA × 2-5% click-to-purchase', source: 'assumption (Disco CPC model, public help center)' });
+    assumptions.push({ field: 'bidding.cpc_alternative', value: `${cents(cpc.min_usd)}-${cents(cpc.max_usd)}`, why: 'advertiser competes on price; CPC = CPA × 2-5% click-to-purchase', source: 'assumption (Disco CPC model, public help center)' });
   }
 
   assumptions.push({ field: 'measurement.attribution_days', value: String(ATTRIBUTION_DAYS), why: 'common DTC click window for a post-purchase offer', source: 'assumption; match the advertiser\'s own attribution before launch' });
@@ -229,7 +228,7 @@ export function buildConfig(input: BuildConfigInput): CampaignConfig {
 
   return {
     meta,
-    campaign: { name: `${profile.product}: ${settings.conversionEvent}`, objective: settings.conversionEvent, status: 'draft', customer_type: 'new_only' },
+    campaign: { name: profile.product, objective: settings.conversionEvent, status: 'draft', customer_type: 'new_only' },
     flight: { start, end: addDays(start, days - 1), days, seasonality_note: seasonalityNote },
     budget: {
       total_usd: total,

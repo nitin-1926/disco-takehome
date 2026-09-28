@@ -43,7 +43,7 @@ export function ConfigView({ state }: { state: RunState }) {
       <div className="arrive grid grid-cols-1 gap-6">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-panel border border-line bg-surface p-4 text-sm sm:grid-cols-4">
           <Stat label="Budget" value={usd(cfg.budget.total_usd)} sub={cfg.budget.total_usd > 0 ? `${usd(cfg.budget.daily_cap_usd)} a day` : 'nothing to spend'} />
-          <Stat label="Bid" value={`CPA ${usd(cfg.bidding.cpa_usd, true)}`} sub={cfg.bidding.cpc_alternative ? `or CPC ${usd(cfg.bidding.cpc_alternative.min_usd, true)}-${usd(cfg.bidding.cpc_alternative.max_usd, true)}` : cfg.campaign.objective} />
+          <Stat label="Bid" value={cfg.budget.total_usd > 0 ? `CPA ${usd(cfg.bidding.cpa_usd, true)}` : 'No bid'} sub={cfg.bidding.cpc_alternative ? `or CPC ${usd(cfg.bidding.cpc_alternative.min_usd, true)}-${usd(cfg.bidding.cpc_alternative.max_usd, true)}` : cfg.campaign.objective} />
           <Stat label="Flight" value={`${cfg.flight.days} days`} sub={`${cfg.flight.start} to ${cfg.flight.end}`} />
           <Stat label="Expected conversions" value={String(cfg.measurement.expected_conversions)} sub={`${cfg.measurement.attribution_days}-day attribution`} />
           {cfg.flight.seasonality_note && <p className="col-span-full text-xs text-ink-2">{cfg.flight.seasonality_note}</p>}

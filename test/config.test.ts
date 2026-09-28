@@ -83,6 +83,14 @@ describe('#1 full assembly', () => {
     const excluded = new Set(c.exclusions.publishers.map((e) => e.id));
     expect(c.placements.every((p) => !excluded.has(p.publisher_id))).toBe(true);
   });
+  test('assumptions list only numbers the plan uses, money to the cent', () => {
+    const weakOnly = build(6);
+    expect(weakOnly.budget.explore_share).toBe(0);
+    expect(weakOnly.assumptions.map((a) => a.field)).not.toContain('budget.explore_share');
+    const none = build(1, normalizeSettings(), { triage: { viability: 'none' } });
+    expect(none.assumptions.map((a) => a.field)).not.toContain('cvr_prior');
+    expect(c.assumptions.find((a) => a.field === 'bidding.cpa_usd')!.value).toBe(`$${c.bidding.cpa_usd.toFixed(2)}`);
+  });
   test('the config carries the plan, not the reasoning behind it', () => {
     expect(Object.keys(c).sort()).toEqual(['assumptions', 'bidding', 'budget', 'campaign', 'creatives', 'exclusions', 'flight', 'measurement', 'meta', 'placements', 'targeting', 'warnings']);
     expect(Object.keys(c.placements[0]).sort()).toEqual(['allocation_usd', 'creative_ids', 'expected_conversions', 'inventory_used_pct', 'publisher_id', 'role', 'share']);

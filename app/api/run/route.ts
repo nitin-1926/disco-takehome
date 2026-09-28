@@ -124,6 +124,7 @@ export async function POST(req: Request): Promise<Response> {
   let closed = false;
   let seq = 0;
   let ledgerRow: Record<string, unknown> | null = null;
+  const startedAt = Date.now();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -137,7 +138,6 @@ export async function POST(req: Request): Promise<Response> {
       };
       const sink = (ev: RunEvent) => write(`id: ${++seq}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
       write(PADDING); // defeats proxy/Safari buffering so the first stage paints immediately
-      const startedAt = Date.now();
       const ctx: RunContext = {
         run_id,
         sink,
@@ -189,8 +189,11 @@ export async function POST(req: Request): Promise<Response> {
     },
   });
 
-  // Settlement, cache writes and the ledger row run after the response ends; drain tasks appended while draining.
+  // Settlement, cache writes, the lock release and the ledger row run after the response ends. With request
+  // cancellation on (vercel.json), a client disconnect terminates the stream's own work, so these must not depend
+  // on it: after() is the part the platform guarantees. Drain tasks appended while draining.
   after(async () => {
+    if (lock && store) await store.unlock(lock.key, lock.token).catch((err) => console.error('[route] unlock failed', (err as Error).message));
     for (let i = 0; i < deferred.length; i++) {
       try {
         await deferred[i]();
@@ -198,6 +201,10 @@ export async function POST(req: Request): Promise<Response> {
         console.error('[route] deferred task failed', (err as Error).message);
       }
     }
+    // A cancelled run may never reach the summary: record what is known (its reservations stay on the counter).
+    ledgerRow ??= replayOnly
+      ? null
+      : { ts: new Date().toISOString(), epoch: e.spendEpoch, source: e.isVercel ? 'vercel' : 'local', run_id, cold, live_flag: live, cost_usd: 0, reserved_usd: hook ? hook.reservedMicro() / 1e6 : 0, calls: [], total_ms: Date.now() - startedAt, errors: [], aborted: true, store_rtt_ms: lastProbeRttMs() };
     if (ledgerRow && store) await store.ledger(ledgerKey(), ledgerRow).catch((err) => console.error('[route] ledger failed', (err as Error).message));
   });
 

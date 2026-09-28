@@ -12,7 +12,8 @@
     "build-index": "tsx --conditions=react-server scripts/build-index.ts",
     "smoke": "tsx --conditions=react-server scripts/smoke-models.ts",
     "run": "tsx --conditions=react-server scripts/run.ts",
-    "ledger": "tsx --conditions=react-server scripts/ledger.ts"
+    "ledger": "tsx --conditions=react-server scripts/ledger.ts",
+    "verify:hosted": "tsx --conditions=react-server scripts/verify-hosted.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.71",

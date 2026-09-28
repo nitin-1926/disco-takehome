@@ -130,3 +130,10 @@ export function resolveViability(
   }
   return { viability: llm, flagged: false, message: null };
 }
+
+/** The model's pairwise "why A beats B" lines, kept only where code ranked A above B: shown as the reason for the order,
+ * a line that contradicts the order would say the opposite of the list it sits under. */
+export function consistentComparatives<T extends { higher: string; lower: string }>(comparatives: T[], scores: PublisherScore[]): T[] {
+  const rank = new Map(scores.map((s, i) => [s.publisher_id, i]));
+  return comparatives.filter((c) => rank.has(c.higher) && rank.has(c.lower) && rank.get(c.higher)! < rank.get(c.lower)!);
+}

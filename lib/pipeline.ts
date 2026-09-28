@@ -3,7 +3,7 @@ import { buildConfig } from './config';
 import { personas as PERSONAS, publishers as PUBLISHERS } from './data';
 import { retrieveCached, type Retrieved } from './embed';
 import { env } from './env';
-import { groupExclusions, resolveViability, scorePublishers, WEIGHTS, type Weights } from './funnel';
+import { consistentComparatives, groupExclusions, resolveViability, scorePublishers, WEIGHTS, type Weights } from './funnel';
 import { checkLimits, groundCreative } from './grounding';
 import { callLLM, LlmError, type CallOptions, type CallResult, type PromptModule } from './llm';
 import { CREATIVES_MAX, PIPELINE_VERSION } from './models';
@@ -285,14 +285,15 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
       const scores = scorePublishers(profile, PUBLISHERS.filter((p) => ids.includes(p.id)), r.output.scores, similarity, weights);
       const resolved = resolveViability(profile.triage.viability, scores);
       const triage: Triage = { ...profile.triage, viability: resolved.viability };
-      Object.assign(result, { publishers: scores, triage, viabilityNote: resolved.message, exclusionGroups: groupExclusions(scores), comparatives: r.output.comparatives });
+      const comparatives = consistentComparatives(r.output.comparatives, scores);
+      Object.assign(result, { publishers: scores, triage, viabilityNote: resolved.message, exclusionGroups: groupExclusions(scores), comparatives });
       emit({
         type: 'stage',
         stage: 'score_publishers',
         status: 'done',
         source: r.source,
         ms: Date.now() - tScoring,
-        payload: { scores, triage, viability_note: resolved.message, exclusion_groups: result.exclusionGroups, comparatives: r.output.comparatives },
+        payload: { scores, triage, viability_note: resolved.message, exclusion_groups: result.exclusionGroups, comparatives },
       });
       return r.output;
     } catch (e) {

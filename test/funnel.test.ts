@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import publishers from '@/data/publishers.json';
 import type { AdvertiserProfile, Publisher, PublisherScore } from '@/lib/types';
-import { GATE, THRESHOLDS, WEIGHTS, effectiveWeights, groupExclusions, resolveViability, scorePublishers } from '@/lib/funnel';
+import { GATE, THRESHOLDS, WEIGHTS, effectiveWeights, groupExclusions, resolveViability, scorePublishers, consistentComparatives } from '@/lib/funnel';
 import { profiles, publisherDims } from './fixtures/llm-dims';
 
 const pubs = publishers as Publisher[];
@@ -21,6 +21,12 @@ describe('constants', () => {
     const at = (category_fit: number) => scorePublishers(profiles[1], pubs, dims.map((d) => ({ ...d, category_fit })))[0].score;
     expect(at(5)).toBeGreaterThan(at(4));
     expect(at(4)).toBeGreaterThan(at(3));
+  });
+  test('a pairwise reason that contradicts the final order is dropped', () => {
+    const scores = scorePublishers(profiles[1], pubs, publisherDims[1]);
+    const [a, b] = scores.map((s) => s.publisher_id);
+    const kept = consistentComparatives([{ higher: a, lower: b, why: 'agrees' }, { higher: b, lower: a, why: 'contradicts' }], scores);
+    expect(kept.map((c) => c.why)).toEqual(['agrees']);
   });
   test('assumed price halves the price weight and renormalises', () => {
     const w = effectiveWeights(WEIGHTS, 'assumed');

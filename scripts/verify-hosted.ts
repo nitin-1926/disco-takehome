@@ -92,7 +92,8 @@ function summarizeCalls(calls: { module: string; ms: number }[]): string {
 
 /** Cancel mid-stage; the platform must stop the run and release the lock so the next run is admitted. */
 async function cancelCheck(L: string[], check: (ok: boolean, what: string) => void) {
-  const cut = await run({ input: 'Hand-bound leather journals from a bindery in Vermont, $60.' }, { abortAfter: 'understand' });
+  // live: true so the calls are really in flight (a cached input would finish before the cancel lands).
+  const cut = await run({ input: 'Hand-bound leather journals from a bindery in Vermont, $60.', live: true }, { abortAfter: 'understand' });
   L.push(`- cancelled after understand at ${s(cut.understandMs)}`);
   await new Promise((r) => setTimeout(r, 4000));
   const next = await run({ input: 'Small-batch granola with no added sugar, sold in 1 lb bags.' });

@@ -158,6 +158,8 @@ export interface PersonaScore extends LlmPersonaJudgment {
   score: number;
   label: PersonaLabel;
   picked: boolean;
+  /** False when this persona shops on none of the placement-eligible publishers: its ad has nowhere natural to run. */
+  publisher_match: boolean;
 }
 
 // ---- Stage 5: creative + critic ----

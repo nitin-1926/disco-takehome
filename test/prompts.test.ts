@@ -11,7 +11,7 @@ import { understandModule } from '@/prompts/understand';
 
 const p1 = profiles[1];
 const judgment = personaJudgments[1].find((j) => j.persona_id === 'persona_004')!;
-const persona = { ...judgment, price_fit: 1, demo_fit: 1, score: 0.9, label: 'strong' as const, picked: true, name: 'The Pet Parent', description: 'd' };
+const persona = { ...judgment, price_fit: 1, demo_fit: 1, score: 0.9, label: 'strong' as const, picked: true, publisher_match: true, name: 'The Pet Parent', description: 'd' };
 
 describe('prompt builders', () => {
   test('candidate order does not change scoring args (same key whatever retrieval order)', () => {

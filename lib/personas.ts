@@ -1,5 +1,5 @@
 // Persona scoring and pick (F2): code dims + LLM fit/conflicts → floor, conflict demotion, MMR, stretch labels, publisher mapping. Pure.
-import { ageOverlap, genderFit, parseAgeRange, personaFemaleShare, priceMidpoint, PRICE_FIT_NEUTRAL } from './fit';
+import { AGE_SOFT_FLOOR, ageOverlap, genderFit, parseAgeRange, personaFemaleShare, priceMidpoint, PRICE_FIT_NEUTRAL } from './fit';
 import { GATE } from './funnel';
 import type { AdvertiserProfile, LlmPersonaJudgment, Persona, PersonaLabel, PersonaScore } from './types';
 
@@ -27,7 +27,9 @@ export function personaPriceFit(price: AdvertiserProfile['price'], persona: Pers
 
 export function personaDemoFit(profile: AdvertiserProfile, persona: Persona): number {
   const female = personaFemaleShare(persona.gender_skew);
-  return ageOverlap(profile.buyer_age, parseAgeRange(persona.age_range)) * genderFit(profile.buyer_gender, female, 1 - female);
+  // Same soft floor as publishers: a persona's age_range is a skew, and the buyer age is often an estimate.
+  const age = AGE_SOFT_FLOOR + (1 - AGE_SOFT_FLOOR) * ageOverlap(profile.buyer_age, parseAgeRange(persona.age_range));
+  return age * genderFit(profile.buyer_gender, female, 1 - female);
 }
 
 export function jaccard(a: string[], b: string[]): number {
@@ -67,23 +69,28 @@ export function scorePersonas(
     if (!persona) continue;
     const price_fit = personaPriceFit(profile.price, persona);
     const demo_fit = personaDemoFit(profile, persona);
-    // Same gate as publishers (F4): neutral code dims alone must not lift a persona the model rated 0-2 above the floor.
-    const score = (GATE[j.fit] ?? 0) * (0.5 * (j.fit / 5) + 0.25 * price_fit + 0.25 * demo_fit) * Math.pow(CONFLICT_FACTOR, j.conflicts.length);
     const mapped = j.publisher_ids.filter((id) => recommended.has(id));
+    // A persona that shops on none of the eligible publishers has nowhere natural to run: demoted like a conflict, so
+    // the campaign is personas × publishers rather than personas beside publishers.
+    const publisher_match = mapped.length > 0 || recommended.size === 0; // no eligible set known: nothing to miss
+    const demotions = j.conflicts.length + (publisher_match ? 0 : 1);
+    // Same gate as publishers (F4): neutral code dims alone must not lift a persona the model rated 0-2 above the floor.
+    const score = (GATE[j.fit] ?? 0) * (0.5 * (j.fit / 5) + 0.25 * price_fit + 0.25 * demo_fit) * Math.pow(CONFLICT_FACTOR, demotions);
     scored.push({
       ...j,
-      publisher_ids: mapped.length ? mapped : [...recommendedPublisherIds],
+      publisher_ids: publisher_match ? mapped : [...recommendedPublisherIds],
       price_fit,
       demo_fit,
       score,
-      label: label(score, j.conflicts.length, floor),
+      label: label(score, demotions, floor),
       picked: false,
+      publisher_match,
     });
   }
 
   // Conflicts hard-exclude only while ≥ 3 clean personas clear the floor; otherwise demoted conflicts stay eligible.
   const aboveFloor = scored.filter((s) => s.score >= floor);
-  const clean = aboveFloor.filter((s) => s.conflicts.length === 0);
+  const clean = aboveFloor.filter((s) => s.conflicts.length === 0 && s.publisher_match);
   const pool = clean.length >= PICK_MIN ? clean : aboveFloor;
 
   // MMR: score − λ · max Jaccard(affinities ∪ messaging) to anything already picked.

@@ -10,8 +10,9 @@ const byName = (name: string) => personas.find((p) => p.name === name)!;
 const REC = ['pub_004', 'pub_005'];
 
 function judge(id: string, fit: number, extra: Partial<LlmPersonaJudgment> = {}): LlmPersonaJudgment {
-  return { persona_id: id, fit, conflicts: [], why: '', preferences_to_use: [], disinterests_to_avoid: [], offer_depth: 'none', publisher_ids: [], ...extra };
+  return { persona_id: id, fit, conflicts: [], why: '', preferences_to_use: [], disinterests_to_avoid: [], offer_depth: 'none', publisher_ids: REC, ...extra };
 }
+const demotions = (p: { conflicts: unknown[]; publisher_match: boolean }) => p.conflicts.length + (p.publisher_match ? 0 : 1);
 
 describe('code dims', () => {
   test('price fit tolerates high prices for low-sensitivity personas', () => {
@@ -20,10 +21,10 @@ describe('code dims', () => {
     expect(personaPriceFit({ low: 30, high: 30, basis: 'stated' }, byName('The Value-Conscious Shopper'))).toBe(1);
     expect(personaPriceFit(null, byName('The Gifter'))).toBe(0.7);
   });
-  test('demo fit = age overlap × gender share', () => {
+  test('demo fit = soft-floored age overlap × gender share', () => {
     const female = { ...profiles[10], buyer_age: { low: 50, high: 68 } };
     expect(personaDemoFit(female, byName('The Affluent Classic'))).toBeCloseTo(0.85);
-    expect(personaDemoFit(female, byName('The Gifter'))).toBeCloseTo(0.5 * (11 / 19));
+    expect(personaDemoFit(female, byName('The Gifter'))).toBeCloseTo(0.5 * (0.4 + 0.6 * (11 / 19)));
     expect(personaDemoFit(profiles[1], byName('The Gifter'))).toBe(1);
   });
   test('jaccard over affinities ∪ messaging', () => {
@@ -49,16 +50,18 @@ describe('#10 handbags', () => {
     expect(gifter.label).toBe('stretch');
     expect(gifter.conflicts[0].input_quote).toBe('ships in 6 weeks');
   });
-  test('publisher mapping = LLM suggestion ∩ recommended, falling back to all recommended', () => {
+  test('publisher mapping = LLM suggestion ∩ recommended; no overlap falls back to all recommended and is marked', () => {
     const classic = out.find((p) => p.persona_id === 'persona_005')!;
     expect(classic.publisher_ids).toEqual(['pub_005', 'pub_004']);
+    expect(classic.publisher_match).toBe(true);
     const genz = out.find((p) => p.persona_id === 'persona_003')!;
     expect(genz.publisher_ids).toEqual(REC);
+    expect(genz.publisher_match).toBe(false);
   });
-  test('score formula: gate(fit) × (0.5·fit/5 + 0.25·price + 0.25·demo), halved per conflict', () => {
+  test('score formula: gate(fit) × (0.5·fit/5 + 0.25·price + 0.25·demo), halved per conflict and once more with no publisher', () => {
     for (const p of out) {
       const base = 0.5 * (p.fit / 5) + 0.25 * p.price_fit + 0.25 * p.demo_fit;
-      expect(p.score).toBeCloseTo(GATE[p.fit] * base * Math.pow(0.5, p.conflicts.length), 10);
+      expect(p.score).toBeCloseTo(GATE[p.fit] * base * Math.pow(0.5, demotions(p)), 10);
     }
   });
   test('trap: a fit-1 persona with neutral code dims cannot outrank the conflict-halved Gifter', () => {
@@ -74,6 +77,18 @@ describe('pick rules', () => {
     const js = PERSONA_IDS.map((id, i) => judge(id, 5 - Math.min(i, 4), { publisher_ids: ['pub_001', 'pub_005'] }));
     const out = scorePersonas(profiles[1], personas, js, ['pub_005', 'pub_007']);
     expect(out[0].publisher_ids).toEqual(['pub_005']);
+  });
+  test('a persona that shops on none of the eligible publishers is demoted like a conflict and not picked over matched ones', () => {
+    const js = PERSONA_IDS.map((id, i) => judge(id, 5, { publisher_ids: i < 4 ? ['pub_001'] : REC }));
+    const out = scorePersonas(profiles[1], personas, js, REC);
+    const unmatched = out.filter((p) => !p.publisher_match);
+    expect(unmatched).toHaveLength(4);
+    for (const p of unmatched) {
+      expect(p.picked).toBe(false);
+      expect(p.label).toBe('stretch');
+      expect(p.publisher_ids).toEqual(REC);
+    }
+    expect(out.filter((p) => p.picked).every((p) => p.publisher_match)).toBe(true);
   });
   test('conflicts hard-exclude while ≥ 3 clean personas clear the floor', () => {
     const js = PERSONA_IDS.map((id, i) => judge(id, 5, i < 4 ? { conflicts: [{ field: 'x', persona_value: 'y', input_quote: 'z' }] } : {}));

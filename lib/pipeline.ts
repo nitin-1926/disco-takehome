@@ -401,7 +401,14 @@ export async function runPipeline(rawInput: string, settings: Settings, ctx: Run
   // Map personas and creatives to the placement-eligible publishers (recommended, else weak) once both branches landed.
   const eligible = result.publishers ? eligibleIds(result.publishers) : [];
   if (result.judgments && result.personas) {
-    result.personas = scorePersonas(profile, PERSONAS, result.judgments, eligible, { max: CREATIVES_MAX });
+    // The pick was made before scoring landed (scoring is the slowest stage, and the ads are already in flight), so it
+    // must not change here: rescoring against the eligible set attaches the mapping and marks a picked persona that
+    // shops on none of them (publisher_match false, demoted score, stretch label), and the UI and config say so.
+    const early = result.personas.filter((p) => p.picked).map((p) => p.persona_id);
+    const rescored = new Map(scorePersonas(profile, PERSONAS, result.judgments, eligible, { max: CREATIVES_MAX }).map((p) => [p.persona_id, { ...p, picked: false }]));
+    const picked = early.map((id) => ({ ...rescored.get(id)!, picked: true }));
+    const rest = [...rescored.values()].filter((p) => !early.includes(p.persona_id)).sort((a, b) => b.score - a.score || a.persona_id.localeCompare(b.persona_id));
+    result.personas = [...picked, ...rest];
     const byPersona = new Map(result.personas.map((p) => [p.persona_id, p]));
     for (const c of result.creatives) c.publisher_ids = byPersona.get(c.persona_id)?.publisher_ids ?? [];
   }
